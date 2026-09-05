@@ -1,0 +1,62 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "valdist"
+version = "0.1.0"
+description = "Probabilistic intrinsic-value engine: distributions of value and P(value > price)"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "edvinassvedas-dev" }]
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.12",
+    "pydantic>=2.7",
+    "typer>=0.12",
+    "PyYAML>=6.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/edvinassvedas-dev/valdist"
+Repository = "https://github.com/edvinassvedas-dev/valdist"
+
+[project.scripts]
+valdist = "valdist.cli:app"
+
+[project.optional-dependencies]
+plot = [
+    "matplotlib>=3.8",
+]
+dev = [
+    "pytest>=8.2",
+    "pytest-cov>=5.0",
+    "ruff==0.16.0",
+    "matplotlib>=3.8",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["valdist"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = [".venv"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["valdist"]
+branch = true
+
+[tool.mutmut]
+also_copy = ["examples", "fixtures"]
+source_paths = ["valdist"]
+do_not_mutate = ["valdist/plot.py"]
+pytest_add_cli_args = ["-q", "-x", "--ignore=tests/test_plot.py", "--deselect=tests/test_invariants.py::test_invariant_2_4_every_validate_code_is_covered_by_this_suite", "--deselect=tests/test_smoke.py::test_marginal_mismatch_warning_points_at_caller"]
+mutate_only_covered_lines = false

@@ -1,0 +1,69 @@
+# examples/vici.yaml – golden REIT spec (valdist schema v2)
+#
+# Authoring method (replicate for any name):
+#   1. Marginals are mechanical. Take each v1 driver's worst/base/best and sort
+#      ascending -> p10/p50/p90. The marginal is the driver's own distribution;
+#      base should land at p50. Never bake value-direction into the marginal.
+#   2. Direction is encoded only in loading signs. Define factors so "high" means
+#      one thing (here: high `rate` = rates up = value-destroying; high
+#      `fundamentals` = good operating environment), then sign each loading so a
+#      high factor pushes the driver the right way.
+#   3. Factors and loadings are your judgement - the part the agent must not
+#      invent. Keep factors few (2-3) and loadings mechanism-backed. Constraint
+#      per driver: sum(loading^2) <= 1; the remainder is idiosyncratic
+#      (driver-specific) noise.
+#   4. Validate: Sigma = Lambda Lambda' + diag(1 - sum lambda^2) must be PSD with
+#      unit diagonal (automatic if every sum lambda^2 <= 1).
+#
+# Validated reference (seed 0, n 50000) – use as the regression target:
+#   deterministic base blend = 33.46   value P10/P50/P90 = 28.01 / 33.70 / 41.00
+#   p_undervalued = 0.931              rate factor dominates (rates bet)
+#   full precision, to 1e-4:
+#     28.009594 / 33.695849 / 40.997838, p_undervalued 0.931240
+#   (corrected 2026-07-26 – this block read 28.02 / 33.73 / 41.10, which had
+#    drifted up to 0.102 from what the engine produces. Nothing caught it: the
+#    check's tolerance was ±0.5 on a deterministic engine. Comment only; no
+#    input changed, and the run is bit-identical either way.)
+
+schema_version: "1.0"
+name: "2026-06-28-VICI"
+valuation: reit_v2          # adapters.registry key (corrected DDM + AFFO-DCF FCFE + NAV)
+price: 27.21
+seed: 0
+n: 50000
+
+# High `rate` = rates up (bad for value); high `fundamentals` = good operating env.
+factors: [rate, fundamentals]
+
+drivers:
+  div_growth:                                  # DDM stage-1 dividend growth (%)
+    marginal: {family: lognormal, p50: 3.5, p10: 2.5, p90: 4.5}
+    loadings: {rate: -0.15, fundamentals: 0.70}
+  div_terminal:                                # DDM perpetual growth (%)
+    marginal: {family: normal, p50: 2.0, p10: 1.5, p90: 2.5}
+    loadings: {rate: -0.05, fundamentals: 0.40}
+  cost_of_equity:                              # discounts both DDM and AFFO-DCF (v2) (%)
+    marginal: {family: normal, p50: 9.0, p10: 8.25, p90: 9.75}
+    loadings: {rate: 0.85, fundamentals: -0.10}
+  affo_growth:                                 # AFFO growth (%)
+    marginal: {family: lognormal, p50: 3.5, p10: 2.0, p90: 5.0}
+    loadings: {rate: -0.20, fundamentals: 0.75}
+  affo_terminal:                               # AFFO terminal growth (%)
+    marginal: {family: normal, p50: 2.0, p10: 1.5, p90: 2.5}
+    loadings: {rate: -0.05, fundamentals: 0.45}
+  cap_rate:                                    # NAV driver: gav = noi / cap_rate (%)
+    marginal: {family: lognormal, p50: 6.5, p10: 5.5, p90: 7.5}
+    loadings: {rate: 0.75, fundamentals: -0.30}
+
+constants:                  # structural, not sampled
+  shares: 1090
+  dps: 1.80
+  ddm_stage1_years: 5
+  affo: 2680
+  affo_years: 10
+  noi: 3300                 # gav is derived = noi / cap_rate (cap_rate is a driver)
+  nav_debt: 17100
+  nav_other: 420
+  w_ddm: 15
+  w_affo: 35
+  w_nav: 50

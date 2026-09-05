@@ -1,0 +1,42 @@
+# examples/calibration/vici_2024q3.yaml – Q3 2024 view, higher cap rate uncertainty.
+schema_version: "1.0"
+name: "VICI-2024-Q3"
+valuation: reit_v2
+price: 28.50
+seed: 0
+n: 10000
+
+factors: [rate, fundamentals]
+
+drivers:
+  div_growth:
+    marginal: {family: lognormal, p50: 3.5, p10: 2.5, p90: 4.5}
+    loadings: {rate: -0.15, fundamentals: 0.70}
+  div_terminal:
+    marginal: {family: normal, p50: 2.0, p10: 1.5, p90: 2.5}
+    loadings: {rate: -0.05, fundamentals: 0.40}
+  cost_of_equity:
+    marginal: {family: normal, p50: 9.25, p10: 8.5, p90: 10.0}
+    loadings: {rate: 0.85, fundamentals: -0.10}
+  affo_growth:
+    marginal: {family: lognormal, p50: 3.5, p10: 2.0, p90: 5.0}
+    loadings: {rate: -0.20, fundamentals: 0.75}
+  affo_terminal:
+    marginal: {family: normal, p50: 2.0, p10: 1.5, p90: 2.5}
+    loadings: {rate: -0.05, fundamentals: 0.45}
+  cap_rate:
+    marginal: {family: lognormal, p50: 6.75, p10: 5.75, p90: 7.75}
+    loadings: {rate: 0.75, fundamentals: -0.30}
+
+constants:
+  shares: 1090
+  dps: 1.80
+  ddm_stage1_years: 5
+  affo: 2680
+  affo_years: 10
+  noi: 3300
+  nav_debt: 17100
+  nav_other: 420
+  w_ddm: 15
+  w_affo: 35
+  w_nav: 50

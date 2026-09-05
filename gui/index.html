@@ -1,0 +1,1866 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>valdist viewer</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1a1a1a; --muted: #666; --line: #e0e0e0;
+    --panel: #f7f7f8; --accent: #2b6cb0; --ok: #1a7f43; --warn: #b45309;
+    --err: #c0392b; --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a; --fg: #e6e6e6; --muted: #9aa0a6; --line: #2c3038;
+      --panel: #1b1e24; --accent: #6ba3e0; --ok: #4ade80; --warn: #fbbf24;
+      --err: #f87171;
+    }
+  }
+  * { box-sizing: border-box; }
+  /* Background on html as well as body: body is a fixed-height grid, so any
+     viewport taller than it would otherwise show the browser's default white
+     through underneath - very visible in dark mode. */
+  html { height: 100%; background: var(--bg); }
+  body {
+    margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font: 15px/1.55 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    display: grid; grid-template-columns: 260px 1fr;
+  }
+  aside {
+    border-right: 1px solid var(--line); overflow-y: auto; padding: 14px;
+    background: var(--panel);
+  }
+  aside h1 { font-size: 14px; letter-spacing: .06em; text-transform: uppercase;
+             color: var(--muted); margin: 0 0 4px; }
+  aside .sub { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+  /* The filter sits above #list and outside it, so redrawing the list on every
+     keystroke cannot take the focus or the caret out of the field being typed
+     into. */
+  #search {
+    font: inherit; font-family: var(--mono); font-size: 13px; width: 100%;
+    padding: 6px 9px; margin-bottom: 10px; border-radius: 6px;
+    background: var(--bg); color: var(--fg); border: 1px solid var(--line);
+  }
+  #search:focus { outline: none; border-color: var(--accent); }
+  #search::-webkit-search-cancel-button { filter: grayscale(1); }
+  .list-hint { font-size: 12px; color: var(--muted); font-family: var(--mono);
+               padding: 0 9px; margin: 2px 0 6px; }
+  .list-none { font-size: 12px; color: var(--muted); padding: 6px 9px; }
+  .list-none b { color: var(--fg); font-family: var(--mono); font-weight: 500;
+                 word-break: break-all; }
+  .item {
+    padding: 7px 9px; border-radius: 6px; cursor: pointer; font-family: var(--mono);
+    font-size: 13px; border: 1px solid transparent;
+    display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+  }
+  /* Age sits at the trailing edge, muted, so scanning the list still reads as a
+     column of names. Stale takes the same colour the portfolio's age column
+     takes, because it is the same statement about the same row. */
+  .age { font-size: 11px; color: var(--muted); flex: none; }
+  .age.stale { color: var(--viz-neg); }
+  .item.active .age { color: inherit; }
+  .list-tools { display: flex; gap: 6px; margin: 6px 0 10px; }
+  .list-tools button {
+    font: inherit; font-size: 11px; font-family: var(--mono); cursor: pointer;
+    padding: 3px 8px; border-radius: 5px; background: var(--bg); color: var(--muted);
+    border: 1px solid var(--line);
+  }
+  .list-tools button.on { color: var(--accent); border-color: var(--accent); }
+  .list-group {
+    display: flex; justify-content: space-between; font-family: var(--mono);
+    font-size: 11px; color: var(--muted); padding: 8px 9px 3px;
+    border-top: 1px solid var(--line); margin-top: 6px;
+  }
+  .list-group:first-of-type { border-top: none; margin-top: 0; }
+  /* Flags: one badge per thing the row has to declare. Muted by default so a
+     "no quote" note does not shout; warn/bad carry the floored-draw and
+     degenerate-result cases. */
+  td.flags { white-space: normal; }
+  .badge {
+    display: inline-block; font-family: var(--mono); font-size: 11px;
+    padding: 1px 6px; margin: 1px 3px 1px 0; border-radius: 4px;
+    background: var(--bg); color: var(--muted); border: 1px solid var(--line);
+  }
+  .badge.warn { color: var(--viz-neg); border-color: var(--viz-neg); }
+  .badge.bad { color: #fff; background: var(--viz-neg); border-color: var(--viz-neg); }
+  .item:hover { background: var(--bg); }
+  .item.active { background: var(--bg); border-color: var(--accent); color: var(--accent); }
+  main { overflow-y: auto; padding: 22px 26px; min-width: 0; }
+  /* Width caps, layered. Without them `table { width: 100% }` stretched a
+     two-column stat table across a 1920px screen, leaving ~1570px of dead
+     space between "P10" and its value, and made every tornado bar ~880px so
+     they all read as maxed out and stopped comparing anything.
+       --content : the reading column, matching the report tab's own measure.
+       --stats   : key/value pairs - short strings, must stay scannable.
+       --tornado : wide enough for the bars to differ visibly, no wider. */
+  :root { --content: 1080px; --stats: 440px; --tornado: 680px; }
+  main > * { max-width: var(--content); }
+  .stats { max-width: var(--stats); }
+  .tornado-t { max-width: var(--tornado); }
+  /* Genuinely wide content (worlds' 8 columns, markdown tables, the raw text
+     block) keeps the full content width and scrolls inside itself rather than
+     forcing the page to scroll sideways. */
+  .scroll { max-width: var(--content); }
+  .empty { color: var(--muted); margin-top: 40vh; text-align: center; }
+  h2 { margin: 0 0 2px; font-size: 20px; font-family: var(--mono); }
+  .tagline { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; align-items: center; }
+  .price-box { display: flex; align-items: center; gap: 7px; margin-right: 4px;
+               padding-right: 12px; border-right: 1px solid var(--line); }
+  .price-box label { font-size: 12px; color: var(--muted); }
+  .price-box input {
+    font: inherit; font-family: var(--mono); font-size: 13px; width: 8.5ch;
+    padding: 5px 7px; text-align: right; border-radius: 6px;
+    background: var(--bg); color: var(--fg); border: 1px solid var(--line);
+  }
+  .price-box input:focus { outline: none; border-color: var(--accent); }
+  .price-box .hint { font-size: 12px; color: var(--muted); font-family: var(--mono); }
+  .whatif { color: var(--warn); border-color: var(--warn);
+            background: color-mix(in srgb, var(--warn) 10%, transparent); }
+  tr.centre td { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  td.tag { color: var(--muted); font-size: 12px; }
+  button {
+    font: inherit; font-size: 13px; padding: 6px 13px; cursor: pointer;
+    background: var(--bg); color: var(--fg);
+    border: 1px solid var(--line); border-radius: 6px;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  button:disabled { opacity: .5; cursor: progress; }
+  .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin-bottom: 14px; }
+  .tab {
+    padding: 7px 13px; cursor: pointer; font-size: 13px; color: var(--muted);
+    border-bottom: 2px solid transparent; margin-bottom: -1px;
+  }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  pre {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    padding: 14px; overflow-x: auto; font-family: var(--mono); font-size: 12.5px;
+    line-height: 1.5; white-space: pre; margin: 0;
+  }
+  .md { max-width: 78ch; }
+  .md h1 { font-size: 21px; margin: 0 0 12px; }
+  .md h2 { font-size: 17px; margin: 26px 0 9px; padding-bottom: 5px;
+           border-bottom: 1px solid var(--line); }
+  .md h3 { font-size: 15px; margin: 20px 0 7px; }
+  .md p { margin: 0 0 11px; }
+  .md ul { margin: 0 0 11px; padding-left: 20px; }
+  .md li { margin-bottom: 4px; }
+  .md code { font-family: var(--mono); font-size: 12.5px; background: var(--panel);
+             padding: 1px 5px; border-radius: 4px; }
+  .md pre code { background: none; padding: 0; }
+  .md table { margin: 0 0 14px; }
+  .md hr { border: 0; border-top: 1px solid var(--line); margin: 18px 0; }
+  .md blockquote { margin: 0 0 11px; padding-left: 12px; border-left: 3px solid var(--line);
+                   color: var(--muted); }
+  /* Capped with the tornado rather than the content column: a banner floating
+     at 1080px above a 440px stat table reads as two unrelated blocks. Long
+     validation digests simply wrap, which is easier to read than one very
+     long line anyway. */
+  .banner { border-radius: 8px; padding: 10px 13px; margin-bottom: 12px; font-size: 13px;
+            border: 1px solid; max-width: var(--tornado); }
+  .banner.ok   { color: var(--ok);   border-color: var(--ok);   background: color-mix(in srgb, var(--ok) 8%, transparent); }
+  .banner.warn { color: var(--warn); border-color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, transparent); }
+  .banner.err  { color: var(--err);  border-color: var(--err);  background: color-mix(in srgb, var(--err) 8%, transparent); }
+  .banner b { display: block; margin-bottom: 3px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase;
+       letter-spacing: .04em; }
+  td.num { text-align: right; font-family: var(--mono); }
+  /* ---- data-viz roles -------------------------------------------------
+     Diverging pair blue<->red with a neutral gray midpoint. Both modes are
+     selected, not flipped, and both were run through the palette validator
+     against this page's own surfaces (#ffffff / #14161a): all six checks pass
+     in each. The previous ad-hoc bar blue #6ba3e0 failed the dark lightness
+     band (L 0.702 against 0.48-0.67), which is why these are stepped values
+     rather than one hue reused. */
+  :root {
+    --viz-pos: #2a78d6; --viz-neg: #e34948;
+    --viz-track: #eceae5; --viz-axis: #c3c2b7; --viz-band: rgba(42,120,214,0.22);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --viz-pos: #3987e5; --viz-neg: #e66767;
+      --viz-track: #26262b; --viz-axis: #3a3a40; --viz-band: rgba(57,135,229,0.28);
+    }
+  }
+
+  /* Hero: the one number the view leads with. Proportional figures, system
+     sans - tabular-nums would make a value like 0.4272 look loose this large. */
+  .hero { margin: 4px 0 22px; }
+  .hero .lab { font-size: 12px; letter-spacing: .05em; text-transform: uppercase;
+               color: var(--muted); margin-bottom: 2px; }
+  .hero .val { font-size: 52px; line-height: 1.05; font-weight: 600; letter-spacing: -0.02em; }
+  .hero .sub { font-size: 13px; color: var(--muted); margin-top: 3px; }
+
+  .viz { margin: 0 0 24px; max-width: var(--tornado); }
+  .viz-head { font-size: 13px; font-weight: 600; margin-bottom: 3px; }
+  .viz-sub { font-size: 12px; color: var(--muted); font-weight: 400; margin-bottom: 12px; }
+
+  /* Value-range strip: P10-P90 band, P50 tick, price marker. */
+  .strip { position: relative; padding: 26px 34px 30px; }
+  .strip-track { position: relative; height: 14px; border-radius: 7px;
+                 background: var(--viz-track); }
+  .strip-band { position: absolute; top: 0; height: 14px; border-radius: 7px;
+                background: var(--viz-band);
+                box-shadow: inset 0 0 0 1.5px var(--viz-pos); }
+  /* P50 is a 2px surface-coloured notch, not a blue line: a blue tick on a blue
+     band has almost no contrast, and the surface gap is the documented way to
+     separate touching marks. It also reads correctly - the median splits the
+     band's mass in half. */
+  .strip-p50 { position: absolute; top: 0; width: 2px; height: 14px;
+               background: var(--bg); }
+  /* P25 is the conservative value anchor, so it is marked on the band but gets
+     no text tick: a fourth label between P10 and P50 collides on a tight
+     distribution (they are translateX(-50%) and P25/P50 can sit a few percent
+     apart). It reads as a 1px surface hairline - present, subordinate to the
+     median notch, and named in the track tooltip and the sub-heading. */
+  .strip-p25 { position: absolute; top: 3px; width: 1px; height: 8px;
+               background: var(--bg); opacity: 0.75; }
+  /* The price is a reference, not a series, so it wears ink rather than a data
+     hue - and sits above the track so its label cannot collide with the
+     P10/P50/P90 labels below. */
+  .strip-price { position: absolute; top: 8px; bottom: 22px; width: 2px;
+                 background: var(--fg); border-radius: 1px; }
+  .strip-price::after { content: ""; position: absolute; left: -3px; bottom: -1px;
+                        border: 4px solid transparent; border-top-color: var(--fg); }
+  .strip-price-lab { position: absolute; top: -18px; left: 50%; transform: translateX(-50%);
+                     white-space: nowrap; font-size: 12px; font-family: var(--mono); }
+  .strip-tick { position: absolute; bottom: 8px; transform: translateX(-50%);
+                white-space: nowrap; font-size: 12px; font-family: var(--mono);
+                color: var(--muted); }
+  .strip-tick b { color: var(--fg); font-weight: 600; }
+
+  /* Diverging bars, centred on zero: sign is carried by side AND by hue AND by
+     the signed label, so colour is never the only channel. */
+  .dv { display: grid; grid-template-columns: 13ch 1fr 8ch; align-items: center;
+        gap: 4px 10px; font-size: 13px; }
+  /* Four columns when a row carries a note (the tornado's swing); three
+     otherwise, which is what the margin-of-safety chart still uses. */
+  .dv.dv-noted { grid-template-columns: 13ch 1fr 6ch minmax(0, 1.15fr); }
+  .sw { display: grid; grid-template-columns: 1fr 6ch auto; align-items: center;
+        gap: 6px; padding-left: 10px; }
+  .sw-track { position: relative; height: 6px; background: var(--line);
+              border-radius: 3px; overflow: hidden; }
+  .sw-bar { position: absolute; left: 0; top: 0; bottom: 0; display: block;
+            background: var(--muted); }
+  .sw-val { text-align: right; font-family: var(--mono); font-size: 12px; }
+  .sw-band { font-family: var(--mono); font-size: 11px; color: var(--muted);
+             white-space: nowrap; }
+  /* The stated band is not the band the swing was measured across. */
+  .sw-drift { color: var(--warn); }
+  .dv-name { color: var(--fg); }
+  .dv-track { position: relative; height: 18px; }
+  .dv-zero { position: absolute; left: 50%; top: -1px; bottom: -1px; width: 1px;
+             background: var(--viz-axis); }
+  .dv-bar { position: absolute; top: 3px; height: 12px; }
+  .dv-bar.pos { background: var(--viz-pos); border-radius: 0 4px 4px 0; }
+  .dv-bar.neg { background: var(--viz-neg); border-radius: 4px 0 0 4px; }
+  .dv-val { text-align: right; font-family: var(--mono); font-size: 12.5px;
+            font-variant-numeric: tabular-nums; }
+
+  /* Meter for a 0-1 ratio (p_undervalued). Track is a receded step of the
+     fill's own hue, not gray, so state reads across the whole bar. The 0.5
+     hairline is the only threshold that means anything here - the coin flip. */
+  .meter { position: relative; height: 10px; border-radius: 5px;
+           background: color-mix(in srgb, var(--viz-pos) 16%, transparent); min-width: 90px; }
+  .meter > i { position: absolute; left: 0; top: 0; height: 10px;
+               border-radius: 5px; background: var(--viz-pos); }
+  .meter > u { position: absolute; left: 50%; top: -2px; height: 14px; width: 1px;
+               background: var(--viz-axis); }
+
+  /* Marginals: one row per driver, each on its own axis. The deliberate
+     opposite of the timeline above, and the same reasoning as the worlds view:
+     `cap_rate` runs 5-7 and `nav_other` runs 1875-4730, so one shared axis
+     would collapse every narrow band to a hairline against the widest driver.
+     The trade is that widths are not comparable between rows, which is why the
+     numbers sit beside every strip rather than only in a tooltip. */
+  .mg-row { display: grid; grid-template-columns: 15ch 1fr; gap: 2px 12px;
+            align-items: start; padding: 9px 0; border-top: 1px solid var(--line); }
+  .mg-name { font-family: var(--mono); font-size: 12.5px; }
+  .mg-fam { display: block; font-size: 11px; color: var(--muted); }
+  .mg-track { position: relative; height: 26px; }
+  /* Stated is the analyst's claim, so it wears ink; realized is what the engine
+     draws, so it wears the data hue. Where they coincide the second sits on top
+     of the first and the row reads as one band, which is the correct picture. */
+  .mg-stated { position: absolute; top: 3px; height: 7px; border-radius: 4px;
+               background: color-mix(in srgb, var(--fg) 22%, transparent); }
+  .mg-realized { position: absolute; top: 13px; height: 7px; border-radius: 4px;
+                 background: color-mix(in srgb, var(--accent) 45%, transparent); }
+  .mg-mid { position: absolute; top: 1px; height: 11px; width: 2px; background: var(--fg); }
+  .mg-rmid { position: absolute; top: 11px; height: 11px; width: 2px; background: var(--accent); }
+  .mg-nums { grid-column: 2; font-family: var(--mono); font-size: 11.5px;
+             color: var(--muted); font-variant-numeric: tabular-nums; }
+  .mg-nums b { color: var(--fg); font-weight: 600; }
+  .mg-badge { font-size: 11px; padding: 1px 5px; border-radius: 3px;
+              background: var(--panel); color: var(--muted); border: 1px solid var(--line); }
+  .mg-drift-hi { color: var(--warn); font-weight: 600; }
+
+  /* Loadings matrix. Same three channels as .dv - side, hue AND signed label -
+     shrunk to fit a table cell, because a grid of colour-only cells is a
+     heatmap, and a heatmap is the one chart that hides sign from anyone who
+     reads it in grayscale. Λ is judgment on display, so every cell has
+     to be legible as a number, not merely as a shade. */
+  .lam-cell { position: relative; height: 12px; min-width: 74px; }
+  .lam-zero { position: absolute; left: 50%; top: -1px; bottom: -1px; width: 1px;
+              background: var(--viz-axis); }
+  .lam-bar { position: absolute; top: 1px; height: 10px; }
+  .lam-pos { background: var(--viz-pos); border-radius: 0 3px 3px 0; }
+  .lam-neg { background: var(--viz-neg); border-radius: 3px 0 0 3px; }
+  /* An explicit zero gets a visible dot rather than an empty cell: "this factor
+     does not move this driver" is a claim somebody made, and a blank cell reads
+     as "not rendered". */
+  .lam-nil { position: absolute; left: 50%; top: 5px; width: 3px; height: 3px;
+             margin-left: -1px; border-radius: 50%; background: var(--viz-axis); }
+  .lam-val { font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums;
+             color: var(--muted); }
+  .lam-row-full td { background: color-mix(in srgb, var(--warn) 9%, transparent); }
+
+  /* Ticker timeline: one strip per run, stacked chronologically, on one shared
+     axis. The sharing is the whole point and the opposite of the worlds view
+     below, which splits axes because its drivers have incompatible scales.
+     Here every strip is the same company in the same units, so a per-strip axis
+     would rescale each band to its own extent and draw two different views
+     identically - a picture that cannot show the drift it exists to show. */
+  .tl-row { display: grid; grid-template-columns: 11ch 1fr; gap: 2px 12px;
+            align-items: start; margin-bottom: 16px; }
+  .tl-date { font-family: var(--mono); font-size: 12.5px; padding-top: 2px; }
+  .tl-strip { position: relative; height: 30px; }
+  .tl-track { position: absolute; left: 0; right: 0; top: 8px; height: 12px; }
+  .tl-band { position: absolute; top: 0; height: 12px; border-radius: 6px;
+             background: color-mix(in srgb, var(--accent) 30%, transparent); }
+  .tl-p50 { position: absolute; top: -1px; height: 14px; width: 2px; background: var(--bg); }
+  .tl-p25 { position: absolute; top: 1px; height: 10px; width: 1px; background: var(--viz-axis); }
+  .tl-price { position: absolute; top: 2px; bottom: 4px; width: 2px; background: var(--fg); }
+  .tl-price::after { content: ""; position: absolute; left: -3px; bottom: -1px;
+                     border-left: 4px solid transparent; border-right: 4px solid transparent;
+                     border-bottom: 5px solid var(--fg); }
+  .tl-nums { font-family: var(--mono); font-size: 12px; color: var(--muted);
+             font-variant-numeric: tabular-nums; grid-column: 2; }
+  .tl-nums b { color: var(--fg); font-weight: 600; }
+  .tl-axis { grid-column: 2; border-top: 1px solid var(--line); font-family: var(--mono);
+             font-size: 11.5px; color: var(--muted); display: flex;
+             justify-content: space-between; padding-top: 3px; margin-bottom: 14px; }
+
+  /* Worlds: small multiples, one driver per row on its own axis. The drivers
+     have incompatible scales (cost_of_equity 8-10 vs div_growth -0.4-3.8), so
+     a shared axis would be the dual-axis mistake. Ordinal ramp - one hue, three
+     steps - because the three worlds are ordered (P10 < P50 < P90), not nominal. */
+  /* Ordinal ramp, validated with --ordinal against each surface. The light-mode
+     light end is step 250, not the lighter step 200: #9ec5f4 measures 1.79:1 on
+     white, under the 2:1 floor, so the P10 dot would have been near-invisible. */
+  :root { --w10: #86b6ef; --w50: #3987e5; --w90: #184f95; }
+  @media (prefers-color-scheme: dark) {
+    :root { --w10: #86b6ef; --w50: #3987e5; --w90: #1c5cab; }
+  }
+  .wr { display: grid; grid-template-columns: 15ch 1fr; gap: 3px 12px;
+        align-items: center; margin-bottom: 15px; }
+  .wr-name { font-size: 13px; font-family: var(--mono); }
+  .wr-sub { grid-column: 2; font-size: 11.5px; color: var(--muted); margin-top: -2px; }
+  .wr-axis { position: relative; height: 26px; }
+  /* The stated p10-p90 band, as context for "is this draw ordinary?" */
+  .wr-band { position: absolute; top: 9px; height: 8px; border-radius: 4px;
+             background: color-mix(in srgb, var(--viz-pos) 26%, transparent); }
+  .wr-p50 { position: absolute; top: 6px; width: 1px; height: 14px; background: var(--viz-axis); }
+  .wr-rule { position: absolute; top: 12.5px; left: 0; right: 0; height: 1px;
+             background: var(--viz-axis); }
+  /* 2px surface ring so overlapping dots stay legible where worlds coincide. */
+  .wr-dot { position: absolute; top: 7px; width: 12px; height: 12px; border-radius: 50%;
+            margin-left: -6px; box-shadow: 0 0 0 2px var(--bg); }
+  /* A draw outside the stated band gets a warning ring, not a text label. The
+     label version overprinted the caption line beneath it on three of six rows;
+     the caption already says "a draw falls outside the stated band" in words, so
+     the ring is a second channel rather than the only one. */
+  .wr-dot.out { box-shadow: 0 0 0 2px var(--bg), 0 0 0 3.5px var(--warn); }
+  .wr-legend { display: flex; gap: 14px; align-items: center; font-size: 12px;
+               color: var(--muted); margin: 2px 0 16px; }
+  .wr-key { width: 11px; height: 11px; border-radius: 50%; display: inline-block;
+            vertical-align: -1px; margin-right: 5px; }
+
+  /* Histogram of the 50,000 draws. Split at the price: mass to the right of it
+     is p_undervalued, so the split makes the hero number visible rather than
+     merely stated. */
+  /* Top padding is headroom for the price label, which sits above the plot so
+     it cannot collide with the percentile labels below it. */
+  .hist-wrap { position: relative; padding: 20px 0; }
+  .hist { display: flex; align-items: flex-end; gap: 1px; height: 120px; }
+  .hist > i { flex: 1 1 0; min-height: 1px; background: var(--viz-pos);
+              border-radius: 2px 2px 0 0; }
+  .hist > i.over { background: var(--viz-neg); }
+  .hist-price { position: absolute; top: 20px; bottom: 20px; width: 2px;
+                background: var(--fg); }
+  .hist-price::after { content: ""; position: absolute; left: -3px; bottom: -1px;
+                       border: 4px solid transparent; border-top-color: var(--fg); }
+  .hist-price-lab { position: absolute; top: -17px; left: 50%; transform: translateX(-50%);
+                    white-space: nowrap; font-size: 11.5px; font-family: var(--mono); }
+  /* Percentile references: recessive solid hairlines, never dashed. They are
+     chrome, not data - the price line stays ink so it still reads as the one
+     marker that matters. Labels are the percentile name only; the values sit in
+     the range strip directly above, and repeating them here would both clutter
+     the axis and collide with the price label. */
+  .hist-q { position: absolute; top: 20px; bottom: 20px; width: 1px;
+            background: var(--viz-axis); }
+  .hist-q > b { position: absolute; bottom: -19px; left: 50%; transform: translateX(-50%);
+                font-size: 11px; font-weight: 500; color: var(--muted);
+                font-family: var(--mono); }
+  .hist-ax { position: absolute; bottom: 0; left: 0; right: 0; height: 18px;
+             font-size: 11.5px; color: var(--muted); font-family: var(--mono); }
+  .hist-ax span { position: absolute; white-space: nowrap; opacity: .75; }
+  .hist-tail { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+
+  /* Portfolio */
+  .mos-pick { display: flex; align-items: center; gap: 7px; margin: 0 0 14px;
+              font-size: 13px; color: var(--muted); flex-wrap: wrap; }
+  .mos-pick button { padding: 4px 12px; font-size: 12.5px; }
+  .mos-pick button.on { border-color: var(--accent); color: var(--accent);
+                        background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .mos-pick .tag { font-size: 12px; }
+  .pf-row { cursor: pointer; }
+  .pf-row:hover td { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+  .pf-bar { position: relative; height: 9px; border-radius: 5px;
+            background: color-mix(in srgb, var(--viz-pos) 16%, transparent); min-width: 70px; }
+  .pf-bar > i { position: absolute; left: 0; top: 0; height: 9px; border-radius: 5px;
+                background: var(--viz-pos); }
+  .pf-bar > u { position: absolute; left: 50%; top: -2px; height: 13px; width: 1px;
+                background: var(--viz-axis); }
+
+  /* Compare */
+  .cmp-sel { display: flex; align-items: center; gap: 7px; margin: 0 0 14px; }
+  .cmp-sel select { font: inherit; font-size: 13px; padding: 5px 8px; border-radius: 6px;
+                    background: var(--bg); color: var(--fg); border: 1px solid var(--line); }
+  td.up { color: var(--viz-pos); } td.down { color: var(--viz-neg); }
+  td.same { color: var(--muted); }
+  .scroll { overflow-x: auto; }
+  footer { color: var(--muted); font-size: 12px; margin-top: 26px;
+           border-top: 1px solid var(--line); padding-top: 10px; }
+</style>
+</head>
+<body>
+<aside>
+  <h1>valdist</h1>
+  <div class="sub">read-only viewer</div>
+  <input id="search" type="search" placeholder="Filter: ticker or date"
+         autocomplete="off" spellcheck="false" aria-label="Filter analyses">
+  <div id="list"></div>
+</aside>
+<main id="main"><div class="empty">Select an analysis</div></main>
+
+<script>
+const $ = (s, r = document) => r.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+const fmt = n => (typeof n === "number" && isFinite(n)) ? n.toFixed(2) : String(n ?? "-");
+
+let current = null, tab = "report", cache = {}, busy = null, priceOverride = null;
+let allNames = [], compareWith = "";
+// What the sidebar marks as active. `current` cannot serve: it is null both
+// before anything is opened and while the portfolio view is showing, and the
+// sidebar has to tell those two apart. The portfolio entry is not an analysis,
+// so it travels through the same channel under a sentinel rather than through a
+// second flag - one source of truth for one highlight.
+const PORTFOLIO = "@all";
+let selected = null;
+// Sidebar grouping, off by default: date order is the honest default for a list
+// of dated snapshots, and grouping answers a different question ("how has my view
+// of this company moved?") that only a multi-run ticker can even ask.
+let groupByTicker = false;
+// Assigned in boot(), once the analysis list exists. Held at module scope
+// because select() and showPortfolio() both have to redraw the list, and the
+// list is now a function of state (filter + selection) rather than markup
+// written once and patched in place afterwards.
+let drawList = () => {};
+// Which percentile the portfolio's margin-of-safety column is anchored on.
+// P10 by default: margin of safety is a question about the downside, and a name
+// can look healthy on the median while its P10 is severe (A54: P50 +72.6%,
+// P10 -47.6%). Ranking on the median hides exactly the case the framework is
+// meant to catch.
+// Shared with the price ladder, deliberately, rather than each view keeping its
+// own. The anchor is one question - "how do I want margin of safety read?" - not
+// a per-view setting, and the two views disagreeing is what this replaced: the
+// ladder showed P50 and only P50 while the portfolio argued for P10 in its own
+// copy. The ladder is per-analysis and the portfolio cross-analysis, so a reader
+// who sets P90 in one does meet it in the other; that is consistency, and the
+// control is visible and one click away in both.
+// `repriced` starts null, not false, and null is a third value rather than a
+// spelling of "off": it means "server, choose" - re-price if `prices.json` holds
+// any quotes, stay as-analysed if it does not. Only the server can answer that,
+// because the artefact is untracked and may simply not exist, and a hardcoded
+// true against no quotes flags every row "no quote" and re-prices none. The
+// response carries the basis it actually used, and the client adopts it, so the
+// toggle can never show a state the table is not in.
+let mosAnchor = "p10", portfolioRows = null, portfolioMeta = null, repriced = null;
+const LAB = { p10: "P10", p25: "P25", p50: "P50", p90: "P90" };
+const STALE_DAYS = 7;
+
+// Minimal Markdown -> HTML. Deliberately hand-rolled rather than pulling in a
+// library: this viewer stays dependency-free and build-step-free, and the
+// generated reports use a narrow, known subset. Input is escaped first, so no
+// rule below can inject markup even though the files are locally authored.
+function md2html(src) {
+  const inline = s => esc(s)
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+
+  const lines = src.split("\n");
+  const out = [];
+  let i = 0, para = [], list = [];
+
+  const flushPara = () => { if (para.length) { out.push(`<p>${inline(para.join(" "))}</p>`); para = []; } };
+  const flushList = () => { if (list.length) { out.push(`<ul>${list.map(t => `<li>${inline(t)}</li>`).join("")}</ul>`); list = []; } };
+  const flush = () => { flushPara(); flushList(); };
+
+  while (i < lines.length) {
+    const ln = lines[i];
+
+    if (/^```/.test(ln)) {                                    // fenced code
+      flush(); const buf = []; i++;
+      while (i < lines.length && !/^```/.test(lines[i])) buf.push(lines[i++]);
+      i++; out.push(`<pre><code>${esc(buf.join("\n"))}</code></pre>`); continue;
+    }
+    if (/^\|/.test(ln) && /^\|[\s:|-]+\|?\s*$/.test(lines[i + 1] || "")) {   // table
+      flush();
+      const cells = r => r.replace(/^\||\|$/g, "").split("|").map(c => c.trim());
+      const head = cells(ln); i += 2; const body = [];
+      while (i < lines.length && /^\|/.test(lines[i])) body.push(cells(lines[i++]));
+      out.push(`<div class="scroll"><table><thead><tr>${
+        head.map(h => `<th>${inline(h)}</th>`).join("")}</tr></thead><tbody>${
+        body.map(r => `<tr>${r.map(c =>
+          // Right-align only cells that are entirely a number. Matching a
+          // leading digit instead would right-align (and monospace) prose that
+          // merely starts with one, e.g. "$74.90 (2026-07-24 close, Yahoo ...)".
+          `<td${/^[-+±$(]?[\d.,]+\s*[%x×)]?$/.test(c.trim()) ? ' class="num"' : ""}>${
+            inline(c)}</td>`).join("")}</tr>`
+        ).join("")}</tbody></table></div>`);
+      continue;
+    }
+    let m;
+    if ((m = ln.match(/^(#{1,6})\s+(.*)$/))) {                // heading
+      flush(); const lv = Math.min(m[1].length, 3);
+      out.push(`<h${lv}>${inline(m[2])}</h${lv}>`); i++; continue;
+    }
+    if (/^\s*[-*]\s+/.test(ln)) {                             // list item
+      flushPara(); list.push(ln.replace(/^\s*[-*]\s+/, "")); i++; continue;
+    }
+    if (/^>\s?/.test(ln)) {                                   // blockquote
+      flush(); out.push(`<blockquote>${inline(ln.replace(/^>\s?/, ""))}</blockquote>`); i++; continue;
+    }
+    if (/^(-{3,}|_{3,})\s*$/.test(ln)) { flush(); out.push("<hr>"); i++; continue; }
+    if (!ln.trim()) { flush(); i++; continue; }
+    flushList(); para.push(ln); i++;
+  }
+  flush();
+  return out.join("\n");
+}
+
+async function api(path, params = {}) {
+  const qs = new URLSearchParams(params).toString();
+  const res = await fetch(path + (qs ? "?" + qs : ""));
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error || res.statusText);
+  return body;
+}
+
+// Opening index.html straight off disk is the obvious thing to try, and it
+// cannot work: the page is a client for the local server, so its fetches have
+// no origin to resolve against. Say so instead of rendering an empty list under
+// a "Select an analysis" prompt the reader cannot act on.
+function showNoServer(isFile) {
+  $("#search").hidden = true;   // there is nothing behind it to filter
+  $("#list").innerHTML = "";
+  $("#main").innerHTML = `
+    <div style="max-width:60ch;margin:12vh auto 0">
+      <div class="banner err">
+        <b>${isFile ? "Opened as a file, not served" : "Cannot reach the viewer server"}</b>
+        ${isFile
+          ? "This page is the front end for a local server - on its own it has no data to read."
+          : "The page loaded, but its requests to /api/ are failing. Is the server still running?"}
+      </div>
+      <p class="tagline">Start it from the repository root, then open the URL it prints:</p>
+      <pre>python -m gui.server</pre>
+      <p class="tagline">Default: <code>http://127.0.0.1:8756/</code></p>
+    </div>`;
+}
+
+// The sidebar, as a pure function of (analyses, query, selected) so it can be
+// exercised outside a browser - see tests/test_gui_render.py.
+//
+// The filter matches anywhere in the name and splits on whitespace, requiring
+// every term. Names are `<date>-<TICKER>`, so anchoring the match at the start
+// would make the ticker - the half a reader actually thinks in - unsearchable,
+// and treating the query as one literal string would make "vici 2026" match
+// nothing while naming an analysis that exists.
+//
+// The portfolio entry is never filtered out: it is the way back from a query
+// that matches nothing, and dropping it would leave a reader whose only
+// remaining control is the text they just typed.
+// How old an analysis is, and whether that counts as stale. One definition, used
+// by the sidebar and by the portfolio table: two copies would let the list call a
+// row fresh while the table it opens calls the same row stale, and the reader has
+// no way to know which is lying. Same reasoning as `adapters/floors.py`.
+// `null` for an undated entry - undated is not fresh, and 0 renders as "today".
+function ageInfo(days) {
+  if (typeof days !== "number" || !isFinite(days)) return null;
+  return { days, text: days === 0 ? "today" : `${days}d`, stale: days > STALE_DAYS };
+}
+
+function renderList(analyses, query, selected, grouped) {
+  const terms = String(query ?? "").toLowerCase().split(/\s+/).filter(Boolean);
+  const hits = analyses.filter(a => {
+    const name = String(a.name).toLowerCase();
+    return terms.every(t => name.includes(t));
+  });
+  const cls = key => `item${key === selected ? " active" : ""}`;
+  const row = a => {
+    const age = ageInfo(a.age_days);
+    return `<div class="${cls(a.name)}" data-name="${esc(a.name)}">${esc(a.name)}${
+      age ? `<span class="age${age.stale ? " stale" : ""}">${age.text}</span>` : ""}</div>`;
+  };
+
+  // Grouping re-orders, it never filters: every hit appears in exactly one
+  // section. Only tickers with more than one run get a heading - a heading per
+  // ticker once most have one run is noise rather than grouping - and those
+  // are exactly the tickers the Timeline button is offered for, so the toggle
+  // surfaces the set that can actually be compared.
+  const body = () => {
+    if (!grouped) return hits.map(row).join("");
+    const by = new Map();
+    hits.forEach(a => {
+      const t = tickerOf(a.name) || "";
+      if (!by.has(t)) by.set(t, []);
+      by.get(t).push(a);
+    });
+    const multi = [...by.entries()].filter(([t, xs]) => t && xs.length > 1)
+                                   .sort((x, y) => x[0].localeCompare(y[0]));
+    const singles = [...by.entries()].filter(([t, xs]) => !t || xs.length === 1)
+                                     .flatMap(([, xs]) => xs);
+    const head = (t, label) =>
+      `<div class="list-group" data-group-ticker="${esc(t)}">${esc(label)}`;
+    return multi.map(([t, xs]) =>
+        `${head(t, t)}<span>${xs.length} runs</span></div>${xs.map(row).join("")}`).join("")
+      + (singles.length
+        ? `${head("", "Single runs")}<span>${singles.length}</span></div>${
+            singles.map(row).join("")}`
+        : "");
+  };
+
+  return [
+    `<div class="${cls(PORTFOLIO)}" data-portfolio="1">All analyses</div>`,
+    // Inside the list rather than beside the search box, so the delegated
+    // listener already bound on #list handles it and no new registration is
+    // needed - see wireMain's note.
+    `<div class="list-tools"><button data-group="1" class="${
+      grouped ? "on" : ""}">Group by ticker</button></div>`,
+    // "n of N" only while filtering, and only when there is something to show:
+    // a list shortened by the reader's own query should say so, and "0 of 32"
+    // above the sentence below would be saying it twice.
+    terms.length && hits.length
+      ? `<div class="list-hint">${hits.length} of ${analyses.length}</div>` : "",
+    body(),
+    // An empty pane is indistinguishable from a broken one, so it never is.
+    terms.length && !hits.length
+      ? `<div class="list-none">No analysis matches <b>${esc(query)}</b></div>` : "",
+  ].join("");
+}
+
+async function boot() {
+  if (location.protocol === "file:") { showNoServer(true); return; }
+  let analyses;
+  try {
+    ({ analyses } = await api("/api/analyses"));
+  } catch {
+    showNoServer(false);
+    return;
+  }
+  allNames = analyses.map(a => a.name);
+  drawList = () => {
+    $("#list").innerHTML = renderList(analyses, $("#search").value, selected, groupByTicker);
+  };
+  drawList();
+  $("#search").addEventListener("input", drawList);
+  $("#search").addEventListener("keydown", e => {
+    if (e.key === "Escape") { e.target.value = ""; drawList(); }
+  });
+  $("#list").addEventListener("click", e => {
+    // Handled by the listener already bound here rather than by a new one on the
+    // button, which renderList rebuilds on every keystroke - binding per draw
+    // would stack a new listener on every render.
+    if (e.target.closest("[data-group]")) { groupByTicker = !groupByTicker; drawList(); return; }
+    if (e.target.closest("[data-portfolio]")) { showPortfolio(); return; }
+    const el = e.target.closest(".item");
+    if (el && el.dataset.name) select(el.dataset.name);
+  });
+  wireMain();
+  // Deep-link support: /#2026-07-25-A12 opens that analysis directly, so a view
+  // can be shared or bookmarked. Guarded against a stale/unknown hash.
+  const wanted = decodeURIComponent(location.hash.slice(1));
+  if (wanted && analyses.some(a => a.name === wanted)) select(wanted);
+  window.addEventListener("hashchange", () => {
+    const n = decodeURIComponent(location.hash.slice(1));
+    if (n && n !== current && analyses.some(a => a.name === n)) select(n);
+  });
+}
+
+// `2026-07-25-A12` -> `A12`. This is a second implementation of the server's
+// `_ticker_of`, and calling it anything softer would be the comment-instead-of-a-
+// check move: it decides whether the Timeline button is offered, so a pattern
+// that drifts narrower hides the feature entirely while every render test stays
+// green. `tests/test_gui_render.py` pins the two against each other over every
+// real analysis name and the hostile ones this code path refuses. The server still
+// decides what the timeline contains; this only decides whether to ask.
+const tickerOf = n => (String(n ?? "").match(/^\d{4}-\d{2}-\d{2}-([A-Za-z0-9.-]{1,12})$/) || [])[1];
+
+// Every analysis of the same company, this one included.
+function siblingRuns(name) {
+  const t = tickerOf(name);
+  return t ? allNames.filter(n => tickerOf(n) === t) : [];
+}
+
+// The price an untouched page opens with: the current quote if there is one,
+// else the spec's own. A fallback chain rather than a value, and both ways it
+// can be wrong are silent - `prices/prices.json` is untracked and absent until
+// somebody runs the fetcher, so reading `current_price` unconditionally renders
+// an empty field that neither throws nor runs.
+//
+// Why the quote leads: the spec price is the number the analyst typed on the
+// analysis date, and this repo's set spans days to weeks. Opening at it means
+// the first figure on screen answers "was this cheap when I wrote it?" when the
+// question being asked is "is it cheap now?".
+function defaultPrice(a) {
+  return a?.current_price ?? a?.spec_price ?? "";
+}
+
+// Pure, and separated from render() for that reason: the default is a chain
+// with two silent failure modes, so it is worth a test that can see the markup.
+//
+// The spec price keeps its own button. That is what makes opening away from it
+// defensible rather than merely convenient - the published number is one click
+// away, and it is labelled with its value so the reader can see what they are
+// leaving without pressing anything.
+function priceBox(a, override, busy) {
+  const off = busy ? " disabled" : "";
+  const quote = a?.current_price;
+  return `<span class="price-box">
+    <label for="price">Price</label>
+    <input id="price" type="text" inputmode="decimal" value="${
+      esc(override ?? defaultPrice(a))}"${off}>
+    <span class="hint">spec ${a?.spec_price ?? "?"}</span>
+    <button data-act="reset-price"${off} title="back to the default price">Reset</button>
+    ${quote != null
+      ? `<button data-act="use-spec"${off}
+           title="the price this analysis was published at"
+           >Use spec ${fmt(a.spec_price)}</button>
+         <span class="hint" title="quote as of ${esc(a.current_as_of || "")}${
+           a.current_live ? " - LIVE intraday, still moving" : " - settled close"}"
+           >quote ${fmt(quote)}${a.current_live ? " (live)" : ""}</span>`
+      : `<span class="hint" title="run: python -m prices.fetch">no quote</span>`}
+  </span>`;
+}
+
+async function select(name) {
+  if (busy) return;   // a run is in flight against the current spec; let it finish
+  // priceOverride is cleared with the rest: a price typed for one company must
+  // never silently carry over to the next one.
+  current = name; selected = name;
+  cache = {}; tab = "report"; priceOverride = null; compareWith = "";
+  if (decodeURIComponent(location.hash.slice(1)) !== name) location.hash = encodeURIComponent(name);
+  drawList();
+  render();
+  cache.analysis = await api("/api/analysis", { name });
+  render();
+}
+
+function render() {
+  if (!current) return;
+  const a = cache.analysis;
+  $("#main").innerHTML = `
+    <h2>${esc(current)}</h2>
+    <div class="tagline">${a ? "Stage 1 report and Stage 2 spec" : "loading…"}</div>
+    <div class="actions">
+      ${priceBox(a, priceOverride, busy)}
+      ${[["validate", "Validate"], ["run", "Run Monte Carlo"],
+         ["ladder", "Price ladder"], ["worlds", "Worlds"],
+         ["convergence", "Convergence"],
+         // Offered only where it can answer something. A timeline of one run
+         // is valid and the endpoint serves it, but putting the button on the
+         // 40 tickers analysed once would advertise a comparison that does not
+         // exist for them.
+         ...(siblingRuns(current).length > 1 ? [["timeline", "Timeline"]] : [])].map(
+        ([k, label]) => `<button data-act="${k}"${busy ? " disabled" : ""}>${
+          busy === k ? "Running…" : label}</button>`).join("")}
+    </div>
+    <div class="cmp-sel">
+      <label for="cmp">Compare with</label>
+      <select id="cmp"${busy ? " disabled" : ""}>
+        <option value="">-</option>
+        ${allNames.filter(n => n !== current).map(n =>
+          `<option value="${esc(n)}"${compareWith === n ? " selected" : ""}>${esc(n)}</option>`).join("")}
+      </select>
+      <button data-act="compare"${busy || !compareWith ? " disabled" : ""}>${
+        busy === "compare" ? "Running…" : "Compare"}</button>
+    </div>
+    <div class="tabs">
+      ${["report", "spec", "model", "results"].map(t =>
+        `<div class="tab ${t === tab ? "active" : ""}" data-tab="${t}">${t}</div>`).join("")}
+    </div>
+    <div id="body"></div>
+    <footer>Read-only. Nothing here edits a spec or writes back to disk.</footer>`;
+  paint();
+}
+
+// Bound once, on the persistent #main, not inside render(). render() only
+// replaces #main's innerHTML - the element itself survives - so registering
+// here per render stacked a new listener every time. Two listeners meant one
+// click ran act() twice: two concurrent 50,000-draw runs finishing at
+// different moments, each re-rendering, each adding more listeners. That was
+// the flicker, and it compounded with every render.
+function wireMain() {
+  $("#main").addEventListener("click", async e => {
+    const t = e.target.closest(".tab");
+    if (t) {
+      tab = t.dataset.tab;
+      render();
+      // The only tab that costs a request. Fetched on first open rather than
+      // alongside /api/analysis so that selecting an analysis stays one round
+      // trip, and cached for the rest of that analysis - Λ is a property of the
+      // spec file and cannot change while it is open. `cache` is cleared by
+      // select(), so it can never outlive its subject.
+      if (tab === "model" && !cache.model && !cache.modelError && current) {
+        const want = current;
+        try { const d = await api("/api/model", { name: current }); if (want === current) cache.model = d; }
+        catch (err) { if (want === current) cache.modelError = err.message; }
+        if (tab === "model" && want === current) paint();
+      }
+      return;
+    }
+    // Re-anchoring the ladder's margin column. Handled here, on the delegated
+    // listener bound once, rather than re-registered after each ladder render -
+    // that is what stacked listeners and ran one click twice (see above).
+    const m = e.target.closest("button[data-mos]");
+    if (m && cache.ladder) {
+      mosAnchor = m.dataset.mos;
+      cache.results = renderLadder(cache.ladder);
+      paint();
+      return;
+    }
+    const b = e.target.closest("button[data-act]");
+    if (!b) return;
+    // Reset returns to the default, which is the quote when there is one - so
+    // the route back to the published price is its own button rather than this.
+    if (b.dataset.act === "reset-price") { priceOverride = null; render(); return; }
+    if (b.dataset.act === "use-spec") {
+      priceOverride = String(cache.analysis?.spec_price ?? "");
+      render();
+      return;
+    }
+    await act(b.dataset.act);
+  });
+  // Kept in module state, never read out of the DOM at submit time, because
+  // render() rebuilds the input. Deliberately doesn't re-render on each
+  // keystroke - that would destroy focus mid-typing.
+  $("#main").addEventListener("input", e => {
+    if (e.target.id === "price") priceOverride = e.target.value;
+  });
+  // Enter in the price field runs, which is what typing a price implies.
+  $("#main").addEventListener("keydown", e => {
+    if (e.target.id === "price" && e.key === "Enter" && !busy) act("run");
+  });
+  $("#main").addEventListener("change", e => {
+    // Re-render on change (not input): a <select> fires once on commit, so
+    // unlike the price field there is no focus to lose.
+    if (e.target.id === "cmp") { compareWith = e.target.value; render(); }
+  });
+}
+
+async function showPortfolio() {
+  if (busy) return;
+  current = null; selected = PORTFOLIO; cache = {}; compareWith = "";
+  drawList();
+  $("#main").innerHTML = `<h2>All analyses</h2>
+    <div class="tagline">Running every saved spec. First visit takes a few
+    seconds; results are cached per spec until the file changes.</div>`;
+  try {
+    // Nothing sent while the basis is unchosen; "0" sent explicitly once it is,
+    // because an omitted parameter is what asks for the default and would
+    // silently undo a deliberate "As analysed".
+    const d = await api("/api/portfolio",
+      repriced === null ? {} : { repriced: repriced ? "1" : "0" });
+    portfolioRows = d.portfolio; portfolioMeta = d;
+    repriced = d.repriced;
+    paintPortfolio();
+  } catch (err) {
+    $("#main").innerHTML = `<h2>All analyses</h2>
+      <div class="banner err"><b>Failed</b>${esc(err.message)}</div>`;
+  }
+}
+
+// Re-anchoring is a pure re-render: every margin came back with the original
+// run, so switching P10/P50/P90 costs nothing and never re-runs the model.
+function paintPortfolio() {
+  if (!portfolioRows) return;
+  $("#main").innerHTML = `<h2>All analyses</h2>${renderPortfolio(portfolioRows)}`;
+  $("#main").querySelectorAll(".pf-row").forEach(row =>
+    row.addEventListener("click", () => select(row.dataset.open)));
+  $("#main").querySelectorAll("[data-anchor]").forEach(b =>
+    b.addEventListener("click", () => { mosAnchor = b.dataset.anchor; paintPortfolio(); }));
+  // Changing the price basis does need a round trip - a different price is a
+  // different run - unlike re-anchoring, which is pure presentation.
+  $("#main").querySelectorAll("[data-basis]").forEach(b =>
+    b.addEventListener("click", () => {
+      const want = b.dataset.basis === "current";
+      if (want !== repriced) { repriced = want; showPortfolio(); }
+    }));
+}
+
+function paint() {
+  const el = $("#body"); if (!el) return;
+  const a = cache.analysis;
+  if (tab === "report") {
+    el.innerHTML = a?.md ? `<div class="md">${md2html(a.md)}</div>`
+                         : `<p class="tagline">No .md file.</p>`;
+  } else if (tab === "spec") {
+    el.innerHTML = a?.yaml ? `<pre>${esc(a.yaml)}</pre>`
+                           : `<p class="tagline">No .yaml file.</p>`;
+  } else if (tab === "model") {
+    // Fetched lazily by the tab handler, so opening an analysis stays one
+    // request. Three states, kept distinct: a failure must not render as an
+    // empty panel, which is how a spec the validator refused would otherwise
+    // look - and refusing is the point of routing this through hydrate().
+    el.innerHTML = cache.modelError
+      ? `<div class="banner err"><b>Failed</b>${esc(cache.modelError)}</div>`
+      : cache.model ? renderMarginals(cache.model) + renderFactors(cache.model)
+      : `<p class="tagline">Loading…</p>`;
+  } else {
+    el.innerHTML = cache.results || `<p class="tagline">Run an action above.</p>`;
+  }
+}
+
+async function act(kind) {
+  // Setting btn.disabled would not survive the render() below, which rebuilds
+  // the button enabled. `busy` is module state, so it does - and render() reads
+  // it to disable every action while one is in flight. Without it an impatient
+  // double-click still queues two runs of the same expensive job.
+  if (busy) return;
+  busy = kind;
+  tab = "results";
+  cache.results = `<p class="tagline">Running ${esc(kind)}…${
+    kind === "ladder" ? " One model run per rung, so this takes a few seconds." :
+    kind === "convergence" ? " Re-running at double the draws, so this takes a moment." : ""}</p>`;
+  render();
+  // Only send a price when it actually differs from the spec's, so a run at the
+  // published price is never marked a what-if. What gets sent is the effective
+  // price, not the typed one: an untouched field now means the current quote,
+  // and reading the override alone would show the quote in the box and run the
+  // spec's price behind it - the two disagreeing with no way to tell.
+  const spec = cache.analysis?.spec_price;
+  const typed = (priceOverride ?? "").toString().trim();
+  const p = typed || String(defaultPrice(cache.analysis) ?? "");
+  const params = { name: current };
+  if (p && Number(p) !== Number(spec)) params.price = p;
+  try {
+    if (kind === "validate") {
+      const v = await api("/api/validate", { name: current });
+      cache.results = renderValidate(v);
+    } else if (kind === "run") {
+      cache.results = renderRun(await api("/api/run", params));
+    } else if (kind === "ladder") {
+      // The payload is kept, not just its rendering: re-anchoring the margin
+      // column is a pure re-render off this same data, and `cache` is cleared
+      // when another analysis is selected, so it cannot outlive its subject.
+      cache.ladder = await api("/api/ladder", params);
+      cache.results = renderLadder(cache.ladder);
+    } else if (kind === "timeline") {
+      cache.results = renderTimeline(
+        await api("/api/timeline", { ticker: tickerOf(current) }));
+    } else if (kind === "convergence") {
+      cache.results = renderConvergence(await api("/api/convergence", { name: current }));
+    } else if (kind === "compare") {
+      cache.results = renderCompare(await api("/api/compare", { a: current, b: compareWith }));
+    } else {
+      const w = await api("/api/worlds", { name: current });
+      cache.results = renderWorlds(w.worlds, w.marginals);
+    }
+  } catch (err) {
+    cache.results = `<div class="banner err"><b>Failed</b>${esc(err.message)}</div>`;
+  } finally {
+    busy = null;   // finally, so a failed run does not wedge the UI permanently
+  }
+  render();
+}
+
+function renderValidate(v) {
+  let h = v.ok
+    ? `<div class="banner ok"><b>Valid</b>No blocking errors.</div>`
+    : `<div class="banner err"><b>${v.errors.length} error(s)</b>${
+        v.errors.map(e => `[${esc(e.code)}] ${esc(e.message)}`).join("<br>")}</div>`;
+  if (v.notices.length) {
+    h += `<div class="banner warn"><b>${v.notices.length} notice(s)</b>${
+      v.notices.map(n => `[${esc(n.code)}] ${esc(n.message)}`).join("<br>")}</div>`;
+  } else if (v.ok) {
+    h += `<div class="banner ok"><b>No notices</b>Marginals reproduce their stated p10/p90.</div>`;
+  }
+  return h;
+}
+
+// A result computed against a price the analyst did not publish is not that
+// analysis's number. Say so before any figure, every time.
+//
+// Two distinct cases, deliberately worded differently. An arbitrary typed price
+// is a hypothetical. The current market quote is not arbitrary - but it carries
+// its own trap, because re-pricing refreshes only the price while the value view
+// still dates from the analysis. Collapsing both into one message would hide the
+// half that actually misleads.
+function whatIfBanner(r) {
+  if (!r.overridden) return "";
+  const a = cache.analysis;
+  const atMarket = a?.current_price != null
+    && Math.abs(Number(r.price_used) - Number(a.current_price)) < 1e-9;
+  const shared = `The value distribution below is unchanged - price does not
+    enter the valuation - so only P(undervalued) and margin of safety differ.`;
+
+  if (!atMarket) {
+    return `<div class="banner whatif"><b>What-if - not this analysis's price</b>
+      Run at <strong>${fmt(r.price_used)}</strong>; the spec's price is
+      ${fmt(r.spec_price)}. ${shared}</div>`;
+  }
+  const age = ageInfo(a.age_days);
+  return `<div class="banner whatif">
+    <b>Re-priced to the market - only the price is current</b>
+    Run at the quote of <strong>${fmt(r.price_used)}</strong>${
+      a.current_as_of ? ` (as of ${esc(a.current_as_of)})` : ""}; the spec's price
+    is ${fmt(r.spec_price)}. ${shared}
+    ${a.current_live
+      ? `<br><strong>That quote is a LIVE intraday price, not a settled close</strong>,
+         so it is still moving and this number will not reproduce. Re-run after
+         the close for a figure two runs agree on.`
+      : ""}
+    ${age?.stale
+      ? `<br><strong>This analysis is ${age.days} days old</strong>, so the value
+         view behind these numbers predates up to ${age.days} days of news.
+         Re-pricing is not refreshing: a fresh price against a stale set of
+         fundamentals can read more confidently than it deserves.`
+      : ""}</div>`;
+}
+
+// The value distribution with the price marked. This is the question the whole
+// engine exists to answer - "where does the price sit inside the range of
+// value?" - and a six-row key/value table was the least informative way to put
+// it. The domain always includes the price, so a price outside the P10-P90 band
+// stays on screen rather than pinning silently to an edge.
+function rangeStrip(p) {
+  const lo = p.value_p10, mid = p.value_p50, hi = p.value_p90, price = p.price;
+  const anchor = p.value_p25;   // conservative value anchor; may be absent on an old payload
+  if (![lo, mid, hi].every(v => typeof v === "number" && isFinite(v))) return "";
+  const hasPrice = typeof price === "number" && isFinite(price);
+  const min = Math.min(lo, hasPrice ? price : lo), max = Math.max(hi, hasPrice ? price : hi);
+  const pad = (max - min) * 0.08 || 1;
+  const d0 = min - pad, d1 = max + pad;
+  const at = v => ((v - d0) / (d1 - d0)) * 100;
+
+  return `<div class="viz">
+    <div class="viz-head">Value per share</div>
+    <div class="viz-sub">P10 to P90 band, P50 marked${
+      typeof anchor === "number" && isFinite(anchor)
+        ? `; the hairline at ${fmt(anchor)} is the P25 conservative anchor, and price at or below it means paying under a conservative estimate of value`
+        : ""}${hasPrice ? "; price shown as the reference line" : ""}</div>
+    <div class="strip">
+      <div class="strip-track" title="P10 ${fmt(lo)} · P25 ${fmt(anchor)} · P50 ${fmt(mid)} · P90 ${fmt(hi)}">
+        <div class="strip-band" style="left:${at(lo)}%;width:${at(hi) - at(lo)}%"></div>
+        ${typeof anchor === "number" && isFinite(anchor)
+          ? `<div class="strip-p25" style="left:${at(anchor)}%"></div>` : ""}
+        <div class="strip-p50" style="left:${at(mid)}%"></div>
+      </div>
+      ${hasPrice ? `<div class="strip-price" style="left:${at(price)}%">
+        <span class="strip-price-lab">price ${fmt(price)}</span></div>` : ""}
+      <span class="strip-tick" style="left:${at(lo)}%">P10 <b>${fmt(lo)}</b></span>
+      <span class="strip-tick" style="left:${at(mid)}%">P50 <b>${fmt(mid)}</b></span>
+      <span class="strip-tick" style="left:${at(hi)}%">P90 <b>${fmt(hi)}</b></span>
+    </div>
+  </div>`;
+}
+
+// The shape of the 50,000 draws, which three quantiles cannot convey: skew,
+// tail thickness, and how much mass actually sits above the price. Bars are
+// split at the price, so the blue area IS p_undervalued - the hero number made
+// visible instead of merely asserted.
+function histogram(hh, p) {
+  if (!hh || !hh.counts || !hh.counts.length) return "";
+  const { counts, edges, lo, hi, below, above, n, price } = hh;
+  const max = Math.max(...counts) || 1;
+  const at = v => ((v - lo) / (hi - lo)) * 100;
+  const inside = v => typeof v === "number" && isFinite(v) && v >= lo && v <= hi;
+  const hasPrice = inside(price);
+  // Percentile references. Values are deliberately not repeated in the labels:
+  // the range strip immediately above carries them, and "P50 72.20" would sit
+  // three percent of the axis away from "price 74.90" and overprint it.
+  const qs = p ? [["P10", p.value_p10], ["P25", p.value_p25], ["P50", p.value_p50], ["P90", p.value_p90]]
+                  .filter(([, v]) => inside(v)) : [];
+
+  return `<div class="viz">
+    <div class="viz-head">Distribution of value</div>
+    <div class="viz-sub">${n.toLocaleString()} draws${hasPrice
+      ? `; bars right of the price line are the draws worth more than it` : ""}</div>
+    <div class="hist-wrap">
+      <div class="hist">${counts.map((c, i) => {
+        const mid = (edges[i] + edges[i + 1]) / 2;
+        const over = hasPrice && mid < price;
+        return `<i class="${over ? "over" : ""}" style="height:${
+          Math.max(1, (c / max) * 100)}%" title="${fmt(edges[i])} to ${
+          fmt(edges[i + 1])}: ${c.toLocaleString()} draws"></i>`;
+      }).join("")}</div>
+      ${qs.map(([lab, v]) =>
+        `<div class="hist-q" style="left:${at(v)}%" title="${lab} ${fmt(v)}"><b>${lab}</b></div>`
+      ).join("")}
+      ${hasPrice
+        ? `<div class="hist-price" style="left:${at(price)}%" title="price ${fmt(price)}">
+             <span class="hist-price-lab">price ${fmt(price)}</span></div>` : ""}
+      <div class="hist-ax">
+        <span style="left:0">${fmt(lo)}</span>
+        <span style="right:0">${fmt(hi)}</span>
+      </div>
+    </div>
+    ${(below || above) ? `<div class="hist-tail">Axis clipped to the 0.5th-99.5th
+      percentile for legibility: ${below.toLocaleString()} draws fall below it and
+      ${above.toLocaleString()} above. They are counted here, not discarded.</div>` : ""}
+  </div>`;
+}
+
+// Diverging bars centred on zero. Sign is encoded three ways - which side of
+// the zero rule, hue, and the signed label - so it never rests on colour alone.
+// `note` is optional per-row markup rendered in a fourth column - built by the
+// caller, so it is inserted raw and every value inside it must already be
+// escaped. Used by the tornado to put each bar's swing beside it; the margin-of
+// -safety chart passes none and keeps its three columns.
+function divBars(title, sub, rows, domain) {
+  const d = domain || Math.max(...rows.map(r => Math.abs(r.value)), 1e-9);
+  const noted = rows.some(r => r.note);
+  return `<div class="viz">
+    <div class="viz-head">${esc(title)}</div>
+    <div class="viz-sub">${esc(sub)}</div>
+    <div class="dv${noted ? " dv-noted" : ""}">${rows.map(r => {
+      const w = Math.min(Math.abs(r.value) / d, 1) * 50;
+      const pos = r.value >= 0;
+      return `<div class="dv-name">${esc(r.name)}</div>
+        <div class="dv-track" title="${esc(r.name)}: ${esc(r.label)}">
+          <div class="dv-zero"></div>
+          <div class="dv-bar ${pos ? "pos" : "neg"}" style="${
+            pos ? `left:50%;width:${w}%` : `right:50%;width:${w}%`}"></div>
+        </div>
+        <div class="dv-val">${esc(r.label)}</div>${noted ? r.note || "<div></div>" : ""}`;
+    }).join("")}</div>
+  </div>`;
+}
+
+// What each tornado bar is worth, beside the bar. The bar is a Spearman rank
+// correlation and rank correlation is scale-free: it says how monotonically
+// value tracks a driver, never by how much. On the golden spec `div_growth` is
+// the fourth bar at +0.450 and moves the value 0.376 - least of the six - while
+// `affo_terminal` is drawn shorter at +0.317 and moves it 1.146. The bar is not
+// wrong (it reports association in a dependent sample, which is what the
+// factor model is responsible for), but nobody reads a tornado as association.
+//
+// The bar keeps its own length and order. Rescaling it by band width would be
+// the constants-elasticity instrument this project rejected, which ranked the
+// A07 spec's `nav_other` most benign precisely because a uniform relative bump
+// assumes uncertainty is proportional to magnitude.
+function swingNote(s, worst) {
+  if (!s) return "<div></div>";
+  const w = worst > 0 ? Math.min(Math.abs(s.swing) / worst, 1) * 100 : 0;
+  // The band shown is the stated one - what the analyst typed - while the swing
+  // is measured across what the model draws. Three of five families differ, so a
+  // row where they do is marked rather than left to be read as one number.
+  const drifted = s.drift_flagged;
+  return `<div class="sw">
+    <div class="sw-track"><i class="sw-bar" style="width:${w.toFixed(1)}%"></i></div>
+    <span class="sw-val" title="Moving ${esc(s.name)} from its p10 to its p90 with
+      every other driver at its median moves the value from ${fmt(s.value_lo)} to
+      ${fmt(s.value_hi)}.">${fmt(s.swing)}</span>
+    <span class="sw-band${drifted ? " sw-drift" : ""}"${drifted
+      ? ` title="Stated ${fmt(s.p10)} to ${fmt(s.p90)}, but this ${esc(s.family)}
+          marginal actually draws ${fmt(s.input_lo)} to ${fmt(s.input_hi)} - the
+          swing is measured across what is drawn. See the model tab."`
+      : ""}>${fmt(s.p10)} to ${fmt(s.p90)}${drifted ? " !" : ""}</span>
+  </div>`;
+}
+
+function renderRun(r) {
+  const p = r.payload;
+  const warns = p.warnings || [];
+  // The payload's schema version used to be rendered in a footer and compared
+  // against nothing. An unrecognised contract means fields this page reads may
+  // have been renamed or dropped, and every one of them would render as a blank
+  // - so say so at the top rather than presenting a half-empty page as a result.
+  const sch = r.schema;
+  let h = (sch && sch.supported === false
+    ? `<div class="banner err"><b>Unrecognised report schema</b>This viewer reads
+        report_schema_version ${esc(sch.expected)}; this payload says ${
+          esc(String(sch.got))}. Fields below may be missing or renamed - the
+        numbers shown are not trustworthy until the viewer is updated.</div>`
+    : "");
+  // A WARNINGS block means the number is not a result. Lead with it.
+  h += whatIfBanner(r) + (warns.length
+    ? `<div class="banner err"><b>${warns.length} warning(s) - do not quote these numbers</b>${
+        warns.map(w => esc(w)).join("<br>")}</div>`
+    : `<div class="banner ok"><b>Clean run</b>No floored draws, no degenerate p_undervalued.</div>`);
+
+  // Hero: exactly one per view. The MC standard error rides with it at 4 dp,
+  // because a stderr shown as "0.00" reads as "no uncertainty" - an artefact
+  // to flag, not something to round away.
+  const pu = p.p_undervalued, se = p.p_undervalued_stderr;
+  if (typeof pu === "number" && isFinite(pu)) {
+    h += `<div class="hero">
+      <div class="lab">P(undervalued)</div>
+      <div class="val">${pu.toFixed(4)}</div>
+      <div class="sub">±${isFinite(se) ? se.toFixed(4) : "?"} Monte Carlo standard error${
+        (pu === 0 || pu === 1) ? " - a 0 or 1 here is too-narrow inputs, not certainty" : ""}</div>
+    </div>`;
+  }
+
+  h += rangeStrip(p);
+  h += histogram(r.histogram, p);
+
+  // Margin of safety is polarity around zero, so it gets the diverging form
+  // rather than three more numbers in a column.
+  const mos = [["P10", p.mos_p10], ["P25", p.mos_p25], ["P50", p.mos_p50], ["P90", p.mos_p90]]
+    .filter(([, v]) => typeof v === "number" && isFinite(v))
+    .map(([k, v]) => ({ name: k, value: v, label: `${v >= 0 ? "+" : ""}${(v * 100).toFixed(1)}%` }));
+  if (mos.length) {
+    h += divBars("Margin of safety",
+      "Value against price at each percentile; zero is break-even. P25 is the conservative anchor.", mos);
+  }
+
+  const t = p.tornado || [];
+  if (t.length) {
+    // Was an absolute-width bar, which threw the sign away: every driver grew
+    // rightwards and only the number said which way it pushed. A tornado is a
+    // diverging form - that is the whole point of the name.
+    const sens = r.sensitivity || {};
+    const worst = Math.max(...Object.values(sens).map(s => Math.abs(s.swing)), 0);
+    h += divBars(
+      "Tornado",
+      Object.keys(sens).length
+        ? "Bars are Spearman rank correlation, which is scale-free: it says how "
+          + "consistently value follows a driver, not by how much. The column beside "
+          + "each bar is that driver's swing - the value moves this far between its "
+          + "p10 and p90 with the others held at their medians - and its stated band. "
+          + "The two can disagree: a driver can track value closely and still barely "
+          + "move it."
+        : "Spearman rank correlation of each driver with value; bars diverge by sign.",
+      t.map(x => ({
+        name: x.driver,
+        value: x.rank_corr,
+        label: x.rank_corr.toFixed(3),
+        note: swingNote(sens[x.driver], worst),
+      })), 1);
+  }
+  h += `<h3>Full output</h3><pre>${esc(r.text)}</pre>`;
+  h += `<footer>report_schema_version ${esc(p.report_schema_version)}${
+    sch && sch.supported ? " (recognised)" : ""}</footer>`;
+  return h;
+}
+
+function renderLadder(d) {
+  const overridden = Number(d.centre) !== Number(d.spec_price);
+  let h = overridden
+    ? whatIfBanner({ overridden: true, price_used: d.centre, spec_price: d.spec_price })
+    : `<div class="banner ok"><b>Price ladder</b>Centred on the spec's price,
+        ${fmt(d.spec_price)}. Every rung uses the same seed and the same value
+        distribution, so these are exact comparisons, not Monte Carlo noise.</div>`;
+
+  // Same control, same wording and the same free re-anchor as the portfolio -
+  // see `mosAnchor`. `data-mos` rather than the portfolio's `data-anchor`
+  // deliberately: the two live in the same #main, and one delegated handler
+  // matching both would fire this view's repaint from the portfolio's buttons.
+  h += `<div class="mos-pick">
+      <span>Margin of safety at</span>
+      ${["p10", "p25", "p50", "p90"].map(k =>
+        `<button data-mos="${k}" class="${k === mosAnchor ? "on" : ""}">${LAB[k]}</button>`
+      ).join("")}
+      <span class="tag">no re-run needed - all four come back with the same run</span>
+    </div>`;
+
+  const key = `mos_${mosAnchor}`;
+  h += `<table class="tornado-t"><thead><tr>
+      <th>Price</th><th>P(undervalued)</th><th style="width:34%"></th>
+      <th>MoS (${LAB[mosAnchor]})</th><th></th>
+    </tr></thead><tbody>${d.ladder.map(r => `
+      <tr class="${r.is_centre ? "centre" : ""}">
+        <td class="num">${r.price.toFixed(2)}</td>
+        <td class="num">${r.p_undervalued.toFixed(4)}</td>
+        <td><div class="meter" title="P(undervalued) ${r.p_undervalued.toFixed(4)}"><i style="width:${
+          (r.p_undervalued * 100).toFixed(1)}%"></i><u></u></div></td>
+        <td class="num">${r[key] >= 0 ? "+" : ""}${(r[key] * 100).toFixed(1)}%</td>
+        <td class="tag">${r.is_spec ? "spec price" : (r.is_centre ? "your price" : "")}</td>
+      </tr>`).join("")}</tbody></table>
+    <p class="tagline">The hairline on each meter is 0.50 - the price at which
+    the distribution is an even bet. P(undervalued) and the meter do NOT follow
+    the anchor - only the margin column does - so the rungs keep their order
+    whichever anchor you read.</p>`;
+  return h;
+}
+
+function renderConvergence(d) {
+  const c = d.convergence;
+  const rows = [
+    ["Value P50", c.value_p50_N, c.value_p50_2N, 2],
+    ["P(undervalued)", c.p_undervalued_N, c.p_undervalued_2N, 4],
+  ].filter(([, a]) => typeof a === "number");
+  return `<div class="banner ok"><b>Convergence check</b>
+      The same spec re-run at double the draws (${d.n.toLocaleString()} then
+      ${(d.n * 2).toLocaleString()}, same seed). Small drift means the sample is
+      large enough for the statistic to have settled; large drift means it is not.</div>
+    <table class="tornado-t"><thead><tr><th></th>
+      <th>N = ${d.n.toLocaleString()}</th><th>2N</th><th>Drift</th></tr></thead>
+    <tbody>${rows.map(([k, a, b, dp]) => {
+      const delta = b - a;
+      const rel = a !== 0 ? Math.abs(delta / a) : 0;
+      return `<tr><td>${esc(k)}</td><td class="num">${a.toFixed(dp)}</td>
+        <td class="num">${b.toFixed(dp)}</td>
+        <td class="num ${rel < 0.01 ? "same" : (delta >= 0 ? "up" : "down")}">${
+          delta >= 0 ? "+" : ""}${delta.toFixed(dp)} (${(rel * 100).toFixed(2)}%)</td></tr>`;
+    }).join("")}</tbody></table>`;
+}
+
+function renderPortfolio(rows) {
+  const key = `mos_${mosAnchor}`;
+  // The ranking follows the anchor, because the anchor is the question being
+  // asked. Ranking on P(undervalued) while displaying a P10 margin would put
+  // the two most important columns in disagreement on the same row.
+  const ok = rows.filter(r => r.status === "ok")
+                 .sort((a, b) => (b[key] ?? -Infinity) - (a[key] ?? -Infinity));
+  const bad = rows.filter(r => r.status !== "ok");
+
+  // The basis sentence is conditional, and it did not used to be: it claimed
+  // "these are the shipped numbers, not re-priced ones" whether or not the table
+  // was re-priced. That was already wrong under the toggle; with the current
+  // quote as the default it would be the first line on the page, contradicting
+  // every row beneath it.
+  let h = `<div class="banner ok"><b>${ok.length} analyses</b>
+    ${repriced
+      ? `Every saved spec, re-run at the latest quote - the price is current, the
+         value view is not.`
+      : `Every saved spec, run at its own spec price and seed - these are the
+         shipped numbers, not re-priced ones.`} Ranked by margin of safety at
+    <strong>${LAB[mosAnchor]}</strong>.${mosAnchor === "p10"
+      ? " P10 is the default because margin of safety is a question about the"
+        + " downside: a name can look healthy on its median and still carry a"
+        + " severe bad case."
+      : mosAnchor === "p25"
+      ? " P25 is the conservative value anchor: value does not depend on price,"
+        + " so a positive margin here means you are paying less than a"
+        + " deliberately conservative estimate of value. Do not stack it on top"
+        + " of a quality-tier margin requirement - that double-counts."
+      : ""}</div>`;
+
+  h += `<div class="mos-pick">
+      <span>Margin of safety at</span>
+      ${["p10", "p25", "p50", "p90"].map(k =>
+        `<button data-anchor="${k}" class="${k === mosAnchor ? "on" : ""}">${LAB[k]}</button>`
+      ).join("")}
+      <span class="tag">no re-run needed - all four come back with the same run</span>
+    </div>`;
+
+  // Price basis. Re-pricing changes only the price; the value view still dates
+  // from the analysis, so this is offered beside the age column rather than on
+  // its own - the two have to be read together.
+  const cur = portfolioMeta?.current;
+  h += `<div class="mos-pick">
+      <span>Price basis</span>
+      <button data-basis="spec" class="${repriced ? "" : "on"}">As analysed</button>
+      <button data-basis="current" class="${repriced ? "on" : ""}"${
+        cur?.available ? "" : " disabled"}>Current</button>
+      <span class="tag">${cur?.available
+        ? `quotes as of ${esc((cur.as_of || "").slice(0, 10))} - refresh with
+           <code>python -m prices.fetch</code>`
+        : `no prices.json yet - run <code>python -m prices.fetch</code> to enable`}</span>
+    </div>`;
+
+  if (repriced) {
+    h += `<div class="banner whatif"><b>Re-priced - only the price is current</b>
+      Each row is re-run at the latest quote, but its <strong>value</strong>
+      distribution still reflects the fundamentals as of the analysis date. A row
+      flagged stale below is pairing a current price with an old view of the
+      business. Measured example from this repo: at an identical 74.90, the
+      2026-07-19 A12 spec returns p_undervalued 0.3823 against the 2026-07-25
+      spec's 0.4272 - a gap entirely caused by A12's 2026-07-22 Q2 filing, not by
+      the price. Re-pricing is not refreshing.</div>`;
+  }
+
+  h += `<div class="scroll"><table><thead><tr>
+      <th>Analysis</th><th>Age</th><th>MoS (${LAB[mosAnchor]})</th><th>P(undervalued)</th>
+      <th style="width:14%"></th><th>Price</th>
+      <th>P10</th><th>P25</th><th>P50</th><th>P90</th><th>Flags</th>
+    </tr></thead><tbody>${ok.map(r => {
+      const m = r[key];
+      const age = ageInfo(r.age_days);
+      // These are not results, and the ranking is where that has to be
+      // legible: this column used to read "1 warning(s)", which says a row
+      // has something to declare and not what, and the two kinds are different
+      // in kind - a floored tail is a meaningless piece of the distribution, a
+      // degenerate p_undervalued is the whole number being an artefact.
+      const flags = [];
+      // Named, counted, and rated with the engine's own text. 12 of the 13
+      // shipped specs that floor draws fire on fewer than 5 of 50,000, where a
+      // percentage formatted here would read "0.00%" - the disclosure saying the
+      // opposite of what it means. The flag name is shown because it is the only
+      // thing that says which leg floored.
+      (r.diagnostics || []).forEach(d => flags.push(
+        `<span class="badge warn" title="${esc(d.name)}: fired on ${d.count} of the
+          run's draws (${esc(d.rate_text)}). Those draws were floored, not computed,
+          so that tail of the distribution is not meaningful.">${
+          esc(d.name)} ${d.count} (${esc(d.rate_text)})</span>`));
+      if (r.degenerate) flags.push(
+        `<span class="badge bad" title="Every draw came out on one side of the price,
+          so the reported standard error of 0.0000 is an artefact, not confidence.
+          Treat it as a too-narrow-inputs warning, not a result.">p = ${
+          fmt(r.p_undervalued)} exactly - artefact, not a result</span>`);
+      // The partition, so a warning this column does not know how to draw is
+      // still counted rather than silently dropped. `warnings` is the engine's
+      // own total; anything above what is drawn above says so.
+      const declared = (r.diagnostics || []).length + (r.degenerate ? 1 : 0);
+      if (r.warnings > declared) flags.push(
+        `<span class="badge warn">${r.warnings - declared} more warning(s)</span>`);
+      if (repriced && !r.repriced) flags.push(`<span class="badge">no quote</span>`);
+      return `<tr class="pf-row" data-open="${esc(r.name)}">
+        <td>${esc(r.name)}</td>
+        <td class="num ${age?.stale ? "down" : "tag"}" title="analysed ${esc(r.as_of || "?")}">${
+          age ? age.text : "-"}${age?.stale ? " stale" : ""}</td>
+        <td class="num ${m >= 0 ? "up" : "down"}">${
+          typeof m === "number" ? `${m >= 0 ? "+" : ""}${(m * 100).toFixed(1)}%` : "-"}</td>
+        <td class="num">${r.p_undervalued.toFixed(4)}</td>
+        <td><div class="pf-bar"><i style="width:${(r.p_undervalued * 100).toFixed(1)}%"></i><u></u></div></td>
+        <td class="num" title="${r.repriced
+          ? `quote ${esc(r.current_as_of || "")}${
+              r.current_live ? " (LIVE intraday, still moving)" : " (settled close)"
+            }; spec price ${fmt(r.spec_price)}`
+          : "the spec's own price"}">${fmt(r.price)}${
+          r.repriced ? (r.current_live ? "\u2020" : "*") : ""}</td>
+        <td class="num ${mosAnchor === "p10" ? "" : "tag"}">${fmt(r.value_p10)}</td>
+        <td class="num ${mosAnchor === "p25" ? "" : "tag"}">${fmt(r.value_p25)}</td>
+        <td class="num ${mosAnchor === "p50" ? "" : "tag"}">${fmt(r.value_p50)}</td>
+        <td class="num ${mosAnchor === "p90" ? "" : "tag"}">${fmt(r.value_p90)}</td>
+        <td class="tag flags">${flags.join("")}</td>
+      </tr>`;
+    }).join("")}</tbody></table></div>
+    <p class="tagline">Age is days since the analysis date; over ${STALE_DAYS} is
+    marked stale, because a saved verdict decays as both the price and the
+    fundamentals move. ${repriced ? "A price marked * is a current quote and one "
+      + "marked † a live intraday one, neither of them the spec's. " : ""
+      }The value column matching the anchor is highlighted; the
+    other two are muted. The hairline on each P(undervalued) bar is 0.50. Click a
+    row to open it.</p>`;
+
+  if (bad.length) {
+    h += `<div class="banner err"><b>${bad.length} could not be run</b>${
+      bad.map(r => `${esc(r.name)}: ${esc(r.error || r.status)}`).join("<br>")}</div>`;
+  }
+  return h;
+}
+
+function renderCompare(d) {
+  const { a, b } = d;
+  const num = (x, dp = 2) => (typeof x === "number" && isFinite(x)) ? x.toFixed(dp) : "-";
+  const deltaCell = (x, y, dp = 2, pct = false) => {
+    if (typeof x !== "number" || typeof y !== "number") return `<td class="tag">-</td>`;
+    const dd = y - x;
+    const cls = Math.abs(dd) < 1e-9 ? "same" : (dd > 0 ? "up" : "down");
+    return `<td class="num ${cls}">${dd >= 0 ? "+" : ""}${
+      pct ? (dd * 100).toFixed(1) + "%" : dd.toFixed(dp)}</td>`;
+  };
+
+  // The comparison goes in the left column and the analysis you are viewing in
+  // the right, so the delta reads left-to-right as "what changed to arrive
+  // here". The other order computes comparison-minus-current, which renders a
+  // price that fell as "+4.27" - technically consistent, and backwards to read.
+  let h = `<div class="banner ok"><b>${esc(b.name)} &rarr; ${esc(a.name)}</b>
+    Each side run at its own spec price and seed. Delta is
+    ${esc(a.name)} minus ${esc(b.name)}, i.e. what changed to arrive at the
+    analysis you are viewing.</div>`;
+
+  h += `<h3>Results</h3><table class="tornado-t"><thead><tr>
+      <th></th><th>${esc(b.name)}</th><th>${esc(a.name)}</th><th>Delta</th>
+    </tr></thead><tbody>
+    <tr><td>Price</td><td class="num">${num(b.price)}</td><td class="num">${num(a.price)}</td>${deltaCell(b.price, a.price)}</tr>
+    <tr><td>P(undervalued)</td><td class="num">${num(b.p_undervalued, 4)}</td><td class="num">${num(a.p_undervalued, 4)}</td>${deltaCell(b.p_undervalued, a.p_undervalued, 4)}</tr>
+    ${["p10", "p25", "p50", "p90"].map(k =>
+      `<tr><td>Value ${LAB[k]}</td><td class="num">${num(b[`value_${k}`])}</td>
+        <td class="num">${num(a[`value_${k}`])}</td>${
+        deltaCell(b[`value_${k}`], a[`value_${k}`])}</tr>`).join("")}
+    ${["p10", "p25", "p50", "p90"].map(k =>
+      `<tr><td>MoS (${LAB[k]})</td><td class="num">${(b[`mos_${k}`] * 100).toFixed(1)}%</td>
+        <td class="num">${(a[`mos_${k}`] * 100).toFixed(1)}%</td>${
+        deltaCell(b[`mos_${k}`], a[`mos_${k}`], 2, true)}</tr>`).join("")}
+    </tbody></table>
+    <p class="tagline">The whole range, not an anchor you pick: a diff is a
+    question about what moved, and two vintages can agree at the median while
+    disagreeing sharply in the tails - which is the movement worth seeing.</p>`;
+
+  // Drivers present on either side; a driver added or dropped is itself news.
+  const keys = [...new Set([...Object.keys(a.drivers), ...Object.keys(b.drivers)])].sort();
+  h += `<h3>Driver marginals (p10 / p50 / p90)</h3>
+    <div class="scroll"><table><thead><tr><th>Driver</th>
+      <th>${esc(b.name)}</th><th>${esc(a.name)}</th><th>p50 delta</th></tr></thead><tbody>${
+    keys.map(k => {
+      const x = b.drivers[k], y = a.drivers[k];
+      const band = m => m ? `${m.p10} / ${m.p50} / ${m.p90} <span class="tag">(${esc(m.family)})</span>` : "-";
+      // A family change is not visible in a p50 delta but can change the whole
+      // sampled tail, so it is called out in its own right.
+      const famChanged = x && y && x.family !== y.family;
+      return `<tr><td>${esc(k)}</td><td>${band(x)}</td><td>${band(y)}</td>${
+        (x && y)
+          ? (famChanged
+              ? `<td class="num down">family ${esc(x.family)} &rarr; ${esc(y.family)}</td>`
+              : deltaCell(x.p50, y.p50))
+          : `<td class="tag">${x ? "dropped" : "added"}</td>`}</tr>`;
+    }).join("")}</tbody></table></div>`;
+
+  const ck = [...new Set([...Object.keys(a.constants), ...Object.keys(b.constants)])].sort();
+  const changed = ck.filter(k => a.constants[k] !== b.constants[k]);
+  h += `<h3>Constants that changed</h3>`;
+  h += changed.length
+    ? `<div class="scroll"><table><thead><tr><th>Constant</th>
+        <th>${esc(b.name)}</th><th>${esc(a.name)}</th><th>Delta</th></tr></thead><tbody>${
+      changed.map(k => `<tr><td>${esc(k)}</td>
+        <td class="num">${esc(String(b.constants[k] ?? "-"))}</td>
+        <td class="num">${esc(String(a.constants[k] ?? "-"))}</td>
+        ${(typeof b.constants[k] === "number" && typeof a.constants[k] === "number")
+          ? deltaCell(b.constants[k], a.constants[k]) : `<td class="tag">-</td>`}</tr>`).join("")
+      }</tbody></table></div>`
+    : `<p class="tagline">None - every constant is identical.</p>`;
+  return h;
+}
+
+// Every run of one company, stacked chronologically. `Compare` for N.
+//
+// Two things here are load-bearing and both fail silently if got wrong.
+//
+// One shared axis. Value does not depend on price, so every run's band is
+// directly comparable with every other run's whatever each was priced at - that
+// is what licenses a common domain. Scaling each strip to its own extent would
+// draw two different views identically, producing a picture that shows no drift
+// no matter how far the view moved.
+//
+// Two P(undervalued) columns. A saved figure moves because the price moved and
+// because the view moved, and showing only the saved one reports the sum while
+// looking like it reports the second. On the three A12 runs that is 22.1 points
+// saved against 10.3 at a common price - a 2.15x overstatement. Both are shown and
+// the split is stated in words, rather than offered as a toggle whose state the
+// reader has to remember.
+function renderTimeline(d) {
+  const ok = d.runs.filter(r => r.status === "ok");
+  const px = v => (typeof v === "number" && isFinite(v)) ? v : null;
+
+  // The shared domain spans every band AND every price mark, so nothing the
+  // view draws can fall outside its own axis.
+  const pts = [];
+  for (const r of ok) {
+    pts.push(r.value_p10, r.value_p90);
+    if (px(r.spec_price) !== null) pts.push(r.spec_price);
+  }
+  if (px(d.common_price) !== null) pts.push(d.common_price);
+  const min = Math.min(...pts), max = Math.max(...pts);
+  const pad = (max - min) * 0.08 || 1;
+  const d0 = min - pad, d1 = max + pad;
+  const at = v => (((v - d0) / (d1 - d0)) * 100).toFixed(2);
+
+  let h = `<div class="viz-head">${esc(d.ticker)} &ndash; ${ok.length} run${
+      ok.length === 1 ? "" : "s"}${ok.length > 1
+      ? `, ${esc(ok[0].as_of)} to ${esc(ok[ok.length - 1].as_of)}` : ""}</div>
+    <div class="viz-sub">Value per share, every run on <strong>one shared
+      axis</strong> &ndash; value does not depend on price, so the bands are
+      directly comparable however each run was priced. The arrow on each strip is
+      that run's own price.</div>`;
+
+  if (ok.length < 2) {
+    h += `<div class="banner warn"><b>Only one run of ${esc(d.ticker)}</b>
+      A timeline of one cannot show drift. Run this ticker again on a newer base
+      and both will appear here, with the change decomposed into price and view.</div>`;
+  }
+
+  h += d.runs.map(r => {
+    if (r.status !== "ok") {
+      return `<div class="tl-row"><div class="tl-date">${esc(r.as_of || r.name)}</div>
+        <div class="tl-nums" style="color:var(--err)">could not run &ndash; ${
+          esc(r.error || r.status)}</div></div>`;
+    }
+    const lo = at(r.value_p10), hi = at(r.value_p90);
+    const hasP25 = typeof r.value_p25 === "number" && isFinite(r.value_p25);
+    return `<div class="tl-row">
+      <div class="tl-date">${esc(r.as_of)}<br><span class="tag">${
+        r.age_days === 0 ? "today" : `${r.age_days}d`}</span></div>
+      <div class="tl-strip" title="${esc(r.name)}: P10 ${fmt(r.value_p10)} &middot; P50 ${
+        fmt(r.value_p50)} &middot; P90 ${fmt(r.value_p90)}">
+        <div class="tl-track">
+          <div class="tl-band" style="left:${lo}%;width:${(hi - lo).toFixed(2)}%"></div>
+          ${hasP25 ? `<div class="tl-p25" style="left:${at(r.value_p25)}%"></div>` : ""}
+          <div class="tl-p50" style="left:${at(r.value_p50)}%"></div>
+        </div>
+        <div class="tl-price" style="left:${at(r.spec_price)}%"
+             title="its own price, ${fmt(r.spec_price)}"></div>
+      </div>
+      <div class="tl-nums">P10 <b>${fmt(r.value_p10)}</b> &middot; P50 <b>${
+        fmt(r.value_p50)}</b> &middot; P90 <b>${fmt(r.value_p90)}</b>
+        &nbsp;|&nbsp; price ${fmt(r.spec_price)}
+        &nbsp;|&nbsp; P(und) <b>${r.p_undervalued.toFixed(4)}</b> saved${
+        typeof r.p_undervalued_common === "number"
+          ? ` &middot; <b>${r.p_undervalued_common.toFixed(4)}</b> at ${fmt(d.common_price)}`
+          : ""}${r.warnings ? ` &nbsp;|&nbsp; ${r.warnings} warning(s)` : ""}</div>
+    </div>`;
+  }).join("");
+
+  h += `<div class="tl-axis"><span>${fmt(d0)}</span><span>value per share</span>
+    <span>${fmt(d1)}</span></div>`;
+
+  // The decomposition, in words. A reader who has to subtract two columns to
+  // discover that three quarters of the move was price will not do it, and the
+  // saved column is the one that looks authoritative.
+  const both = ok.filter(r => typeof r.p_undervalued_common === "number");
+  if (both.length >= 2) {
+    const a = both[0], b = both[both.length - 1];
+    const saved = (b.p_undervalued - a.p_undervalued) * 100;
+    const view = (b.p_undervalued_common - a.p_undervalued_common) * 100;
+    const price = saved - view;
+    const sg = v => `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(1)}`;
+    h += `<div class="banner ${Math.abs(price) > Math.abs(view) ? "whatif" : "ok"}">
+      <b>Saved ${sg(saved)} points; the view moved ${sg(view)}</b>
+      P(undervalued) as saved went ${a.p_undervalued.toFixed(4)} &rarr;
+      ${b.p_undervalued.toFixed(4)}, a swing of <strong>${sg(saved)}</strong> points.
+      Run at one common price of ${fmt(d.common_price)} it went
+      ${a.p_undervalued_common.toFixed(4)} &rarr; ${b.p_undervalued_common.toFixed(4)},
+      <strong>${sg(view)}</strong>. So <strong>${sg(price)}</strong> points came from
+      the price moving and ${sg(view)} from the view of the business changing.
+      ${Math.abs(price) > Math.abs(view)
+        ? `Most of the movement here is <strong>price, not a change of view</strong>.`
+        : `Most of the movement here is a genuine <strong>change of view</strong>.`}</div>`;
+  }
+  return h;
+}
+
+// What each driver can be: the band the analyst typed, beside the band the
+// engine actually draws.
+//
+// For three of the five families those are not the same thing, and nothing in
+// the YAML says so. `normal` fits one sigma, so an asymmetric 1/7/11 is drawn
+// as 2/7/12. `lognormal` misses its stated tails by a median of 0.044 of its own
+// band across the shipped set, worst 0.253. And `pert`/`triangular` read p10/p90
+// as hard bounds, so a typed p90 is a maximum rather than a 90th percentile - on
+// a real spec here an analyst typed `p90: 119.6` and the engine's p90 is -866.5.
+//
+// The drift is printed for every driver, and the threshold only decides what
+// gets emphasised. `validate`'s own `quantile_mismatch` notice has a threshold
+// and a 4.89% tail error once sat under it and passed in silence; a panel that
+// printed a number only above its own line would make "fine" and "unmeasured"
+// look identical.
+function renderMarginals(d) {
+  const rows = d.marginals || [];
+  let h = `<div class="viz-head">Marginals &ndash; what each driver can be</div>
+    <div class="viz-sub">The <strong>stated</strong> band is what the spec says;
+      the <strong>realized</strong> band is what the engine draws. Each driver is
+      on its own axis (their scales are incompatible), so compare the two bands
+      within a row, never widths across rows. Bands are
+      <em>specified judgment, never fitted</em>.</div>`;
+
+  if (!rows.length) {
+    return h + `<div class="banner ok"><b>No sampled drivers</b>
+      Every input to this valuation is supplied as a constant. That is a legal
+      spec &ndash; but a spec with nothing sampled produces a point estimate
+      wearing a distribution's clothes, so it is worth knowing.</div>`;
+  }
+
+  const flagged = rows.filter(r => r.flagged);
+  if (flagged.length) {
+    h += `<div class="banner warn"><b>${flagged.length} of ${rows.length} bands
+      are drawn more than ${(0.10).toFixed(2)} of their own width from the one
+      stated</b>${flagged.map(r => esc(r.name)).join(", ")}. Not necessarily an
+      error &ndash; for a bounds family it is what the family means &ndash; but
+      it is the gap between what was typed and what was sampled, and it is
+      invisible in the YAML.</div>`;
+  }
+
+  h += rows.map(r => {
+    // Per-driver domain, spanning both bands so neither can fall off its row.
+    const lo = Math.min(r.p10, r.r10), hi = Math.max(r.p90, r.r90);
+    const pad = (hi - lo) * 0.06 || 1;
+    const d0 = lo - pad, d1 = hi + pad;
+    const at = v => (((v - d0) / (d1 - d0)) * 100).toFixed(2);
+    const w = (a, b) => (at(b) - at(a)).toFixed(2);
+    const bound = r.tails === "censored";
+    return `<div class="mg-row">
+      <div class="mg-name">${esc(r.name)}
+        <span class="mg-fam">${esc(r.family)}</span>
+        <span class="mg-badge" title="${bound
+          ? "p10/p90 are read as hard BOUNDS, so the typed numbers are the minimum and maximum - not the 10th and 90th percentiles"
+          : "the family defines tails and draws beyond the stated band"
+        }">${bound ? "censored" : "extrapolated"}</span></div>
+      <div class="mg-track" title="${esc(r.name)}: stated ${fmt(r.p10)} / ${
+        fmt(r.p50)} / ${fmt(r.p90)}, realized ${fmt(r.r10)} / ${fmt(r.r50)} / ${fmt(r.r90)}">
+        <div class="mg-stated" style="left:${at(r.p10)}%;width:${w(r.p10, r.p90)}%"></div>
+        <div class="mg-mid" style="left:${at(r.p50)}%"></div>
+        <div class="mg-realized" style="left:${at(r.r10)}%;width:${w(r.r10, r.r90)}%"></div>
+        <div class="mg-rmid" style="left:${at(r.r50)}%"></div>
+      </div>
+      <div class="mg-nums">stated <b>${fmt(r.p10)}</b> / <b>${fmt(r.p50)}</b> / <b>${
+        fmt(r.p90)}</b> &nbsp;&middot;&nbsp; realized <b>${fmt(r.r10)}</b> / <b>${
+        fmt(r.r50)}</b> / <b>${fmt(r.r90)}</b> &nbsp;&middot;&nbsp;
+        drift <span class="${r.flagged ? "mg-drift-hi" : ""}">${
+          r.drift.toFixed(3)}</span> of the band${bound
+          ? ` &nbsp;&middot;&nbsp; p10/p90 here are BOUNDS, not percentiles`
+          : ""}${r.notice ? `<br><span class="mg-drift-hi">notice</span> ${esc(r.notice)}` : ""}</div>
+    </div>`;
+  }).join("");
+
+  return h;
+}
+
+// Λ, the dependence layer, made reviewable.
+//
+// The factor model is the entire dependence layer, and its loadings are
+// specified by judgment and never fitted - a discipline no code can enforce,
+// so review is what enforces it. Until this panel the viewer rendered no
+// loading anywhere, so
+// reviewing Λ meant reading YAML. This is the one view whose job is to be
+// disagreed with.
+//
+// It derives nothing. Σλ² and ψ arrive computed, from the FactorModel that
+// actually samples - a viewer that starts deriving is a second engine.
+function renderFactors(d) {
+  const k = d.factors.length;
+  const sgn = v => `${v >= 0 ? "+" : "-"}${Math.abs(v).toFixed(3)}`;
+
+  // Independence is expressed as FactorModel([], {}), the limiting case of the
+  // one dependence path - not a missing model. Saying "no factors" and stopping
+  // would read as a spec that forgot to declare them.
+  let h = `<div class="viz-head">&Lambda; &ndash; factor loadings</div>
+    <div class="viz-sub">${k
+      ? `${k} factor${k > 1 ? "s" : ""} &times; ${d.drivers.length} drivers.`
+      : ""} Loadings are <strong>specified judgment, never fitted</strong> from
+      market data. Nothing in the test suite can check one, which is
+      why this panel exists: it is here to be disagreed with.</div>`;
+
+  if (!k) {
+    return h + `<div class="banner ok"><b>No factors &ndash; the drivers are independent</b>
+      This spec declares no common factors, which is how independence is
+      <em>expressed</em> (<code>FactorModel([], {})</code>), not a model that is
+      missing. Every driver carries &psi; = 1: all of its variation is its own,
+      and &Sigma; is the identity.</div>`;
+  }
+
+  if (d.unloaded_factors.length) {
+    h += `<div class="banner warn"><b>${d.unloaded_factors.length} declared factor(s)
+      no driver loads on</b>${d.unloaded_factors.map(esc).join(", ")} &ndash; each
+      contributes a zero column to &Lambda; and drops out of &Lambda;&Lambda;'
+      entirely, so it changes nothing. Not an error, and <code>validate</code>
+      does not flag it: this is also exactly what a mis-typed driver key leaves
+      behind, and that spec validates clean.</div>`;
+  }
+
+  h += `<div class="scroll"><table><thead><tr>
+      <th>Driver</th>${d.factors.map(f => `<th>${esc(f)}</th>`).join("")}
+      <th title="sum of squared loadings - the share of this driver's variance driven by the common factors">&Sigma;&lambda;&sup2;</th>
+      <th title="idiosyncratic standard deviation, sqrt(1 - sum of squared loadings)">&psi;</th>
+    </tr></thead><tbody>${d.drivers.map(r => {
+      // psi = 0 means the draw is a deterministic function of the factors. Legal
+      // - it is the comonotonic limit the engine is built on - and worth calling
+      // out, because a spec that did not intend it has a driver with no
+      // independent variation left at all.
+      const full = r.sum_sq >= 1 - 1e-9;
+      return `<tr class="${full ? "lam-row-full" : ""}">
+        <td>${esc(r.name)}</td>
+        ${r.loadings.map(v => {
+          const w = (Math.min(Math.abs(v), 1) * 50).toFixed(2);
+          return `<td><div class="lam-cell" title="${esc(r.name)}: ${sgn(v)}">
+            <div class="lam-zero"></div>
+            ${v === 0 ? `<div class="lam-nil"></div>`
+              : `<i class="lam-bar ${v > 0 ? "lam-pos" : "lam-neg"}" style="${
+                  v > 0 ? `left:50%` : `left:${(50 - w).toFixed(2)}%`};width:${w}%"></i>`}
+            </div><span class="lam-val">${sgn(v)}</span></td>`;
+        }).join("")}
+        <td class="num">${r.sum_sq.toFixed(3)}</td>
+        <td class="num">${r.psi.toFixed(3)}${
+          full ? ` <span class="tag">fully committed</span>` : ""}</td>
+      </tr>`;
+    }).join("")}</tbody></table></div>
+    <p class="tagline">A loading is a correlation with a latent factor, so its
+    <strong>sign is the economic claim</strong> and its magnitude only says how
+    much. &Sigma;&lambda;&sup2; and &psi;&sup2; are two halves of one budget: they
+    sum to 1 per driver, so a high &Sigma;&lambda;&sup2; means little of that
+    driver moves on its own. A row marked <em>fully committed</em> has &psi; = 0
+    &ndash; no independent variation at all, which is the comonotonic limit and
+    is almost never what a multi-driver spec intends.</p>`;
+  return h;
+}
+
+function renderWorlds(rows, marginals) {
+  if (!rows || !rows.length) return `<p class="tagline">No worlds returned.</p>`;
+  const drivers = Object.keys(rows[0]).filter(k => k !== "quantile" && k !== "value");
+  const WORLDS = [
+    { q: 0.1, key: "--w10", lab: "P10 world" },
+    { q: 0.5, key: "--w50", lab: "P50 world" },
+    { q: 0.9, key: "--w90", lab: "P90 world" },
+  ];
+  const rowFor = q => rows.find(r => Math.abs(r.quantile - q) < 1e-9);
+
+  let h = `<div class="banner ok"><b>Percentile worlds</b>
+    The driver values behind the P10, P50 and P90 outcomes. Each driver is drawn
+    on its own axis - they are not on a common scale - with the p10 to p90 band
+    you specified shown as context. <strong>Each world is a single representative
+    draw</strong> (the one nearest that value percentile), not an average, so a
+    dot outside the band describes that draw rather than a requirement of the
+    outcome.</div>`;
+
+  h += `<div class="wr-legend">${WORLDS.map(w =>
+    `<span><i class="wr-key" style="background:var(${w.key})"></i>${
+      esc(w.lab)} - value ${fmt(rowFor(w.q)?.value)}</span>`).join("")}</div>`;
+
+  h += drivers.map(name => {
+    const m = marginals?.[name];
+    const vals = WORLDS.map(w => rowFor(w.q)?.[name]).filter(v => typeof v === "number");
+    if (!vals.length) return "";
+    // Domain spans the stated band AND every draw, so a draw outside the band
+    // stays on screen instead of pinning silently to an edge.
+    const pts = m ? vals.concat([m.p10, m.p90]) : vals;
+    const lo = Math.min(...pts), hi = Math.max(...pts);
+    const pad = (hi - lo) * 0.12 || Math.abs(hi) * 0.1 || 1;
+    const d0 = lo - pad, d1 = hi + pad;
+    const at = v => ((v - d0) / (d1 - d0)) * 100;
+    const outside = m && vals.some(v => v > m.p90 || v < m.p10);
+
+    return `<div class="wr">
+      <div class="wr-name">${esc(name)}</div>
+      <div class="wr-axis">
+        <div class="wr-rule"></div>
+        ${m ? `<div class="wr-band" style="left:${at(m.p10)}%;width:${
+                at(m.p90) - at(m.p10)}%" title="stated p10 ${m.p10} to p90 ${m.p90}"></div>
+              <div class="wr-p50" style="left:${at(m.p50)}%" title="stated p50 ${m.p50}"></div>` : ""}
+        ${WORLDS.map(w => {
+          const v = rowFor(w.q)?.[name];
+          if (typeof v !== "number") return "";
+          const beyond = m && (v > m.p90 || v < m.p10);
+          return `<div class="wr-dot${beyond ? " out" : ""}" style="left:${
+                    at(v)}%;background:var(${w.key})"
+                    title="${esc(w.lab)}: ${v.toFixed(2)}${
+                      beyond ? " - outside the stated band" : ""}"></div>`;
+        }).join("")}
+      </div>
+      <div class="wr-sub">stated ${m ? `${m.p10} / ${m.p50} / ${m.p90} (${esc(m.family)})` : "band unknown"}
+        &nbsp;·&nbsp; worlds ${WORLDS.map(w => {
+          const v = rowFor(w.q)?.[name];
+          return typeof v === "number" ? v.toFixed(2) : "-";
+        }).join(" / ")}${outside ? " · a draw falls outside the stated band" : ""}</div>
+    </div>`;
+  }).join("");
+
+  // Table-view twin: every value stays reachable without reading a mark.
+  const cols = Object.keys(rows[0]);
+  h += `<h3>Table</h3><div class="scroll"><table><thead><tr>${
+    cols.map(c => `<th>${esc(c)}</th>`).join("")}</tr></thead><tbody>${
+    rows.map(r => `<tr>${cols.map(c =>
+      `<td class="num">${typeof r[c] === "number" ? fmt(r[c]) : esc(r[c])}</td>`).join("")}</tr>`
+    ).join("")}</tbody></table></div>`;
+  return h;
+}
+
+boot();
+</script>
+</body>
+</html>

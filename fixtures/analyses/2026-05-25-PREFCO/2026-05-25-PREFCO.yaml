@@ -1,0 +1,31 @@
+# 2026-05-25-PREFCO - synthetic fixture, not an analysis.
+#
+# Every figure below is invented. This file exists to give the public test suite
+# a stable corpus with the shapes it asserts over; it is not a valuation of
+# anything and PREFCO is not a real listing. See tests/conftest.py.
+#
+# Shape this fixture carries: the preferred_v1 adapter, whose spec shape has two drivers rather than six
+
+schema_version: "1.0"
+name: "2026-05-25-PREFCO"
+valuation: preferred_v1
+price: 21.0
+seed: 0
+n: 20000
+
+factors: [rate, credit]
+
+drivers:
+  required_yield:
+    marginal: {family: normal, p10: 6.5, p50: 7.5, p90: 8.5}
+    loadings: {rate: 0.7, credit: 0.55}
+
+  call_probability:
+    marginal: {family: normal, p10: 22.0, p50: 30.0, p90: 38.0}
+    loadings: {rate: -0.4, credit: -0.35}
+
+constants:
+  par: 25.0
+  coupon_rate: 6.5
+  years_to_call: 3
+  arrears: 0.0

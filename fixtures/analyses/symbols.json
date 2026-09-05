@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "_comment": "Symbol table for the synthetic test corpus. These tickers are invented and are not real listings; the table exists so the loader and the coverage check have something public to run against. The real record carries its own.",
+  "us_listed": {
+    "ACME": {
+      "note": "synthetic fixture ticker, no venue lookup is ever made"
+    },
+    "DRIFTCO": {
+      "note": "synthetic fixture ticker, no venue lookup is ever made"
+    },
+    "FLOORCO": {
+      "note": "synthetic fixture ticker, no venue lookup is ever made"
+    },
+    "PREFCO": {
+      "note": "synthetic fixture ticker, no venue lookup is ever made"
+    },
+    "WIDGET": {
+      "note": "synthetic fixture ticker, no venue lookup is ever made"
+    }
+  },
+  "overrides": {}
+}

@@ -1,0 +1,54 @@
+# 2026-01-05-ACME - synthetic fixture, not an analysis.
+#
+# Every figure below is invented. This file exists to give the public test suite
+# a stable corpus with the shapes it asserts over; it is not a valuation of
+# anything and ACME is not a real listing. See tests/conftest.py.
+#
+# Shape this fixture carries: a clean run - no warnings, no notices; the baseline every list, compare and render case uses
+
+schema_version: "1.0"
+name: "2026-01-05-ACME"
+valuation: reit_v2
+price: 21.0
+seed: 0
+n: 20000
+
+factors: [rate, fundamentals]
+
+drivers:
+  div_growth:
+    marginal: {family: normal, p10: 1.0, p50: 3.0, p90: 5.0}
+    loadings: {rate: -0.35, fundamentals: 0.7}
+
+  div_terminal:
+    marginal: {family: normal, p10: 1.0, p50: 2.0, p90: 3.0}
+    loadings: {rate: -0.15, fundamentals: 0.3}
+
+  cost_of_equity:
+    marginal: {family: normal, p10: 8.0, p50: 9.0, p90: 10.0}
+    loadings: {rate: 0.75, fundamentals: -0.25}
+
+  affo_growth:
+    marginal: {family: normal, p10: 1.0, p50: 3.0, p90: 5.0}
+    loadings: {rate: -0.35, fundamentals: 0.7}
+
+  affo_terminal:
+    marginal: {family: normal, p10: 1.0, p50: 2.0, p90: 3.0}
+    loadings: {rate: -0.15, fundamentals: 0.3}
+
+  cap_rate:
+    marginal: {family: lognormal, p10: 5.5, p50: 6.25, p90: 7.1}
+    loadings: {rate: 0.7, fundamentals: -0.45}
+
+constants:
+  shares: 50.0
+  dps: 1.2
+  ddm_stage1_years: 10
+  affo: 90.0
+  affo_years: 10
+  noi: 130.0
+  nav_debt: 700.0
+  nav_other: 40.0
+  w_ddm: 15
+  w_affo: 40
+  w_nav: 45

@@ -1,0 +1,41 @@
+# 2026-03-15-WIDGET - synthetic fixture, not an analysis.
+#
+# Every figure below is invented. This file exists to give the public test suite
+# a stable corpus with the shapes it asserts over; it is not a valuation of
+# anything and WIDGET is not a real listing. See tests/conftest.py.
+#
+# Shape this fixture carries: the equity_v2 adapter, so the suite does not assert only over REITs
+
+schema_version: "1.0"
+name: "2026-03-15-WIDGET"
+valuation: equity_v2
+price: 40.0
+seed: 0
+n: 20000
+
+factors: [rate, demand]
+
+drivers:
+  fcf_growth:
+    marginal: {family: normal, p10: 1.0, p50: 4.0, p90: 7.0}
+    loadings: {rate: -0.3, demand: 0.75}
+
+  terminal_growth:
+    marginal: {family: normal, p10: 1.0, p50: 2.0, p90: 3.0}
+    loadings: {rate: -0.1, demand: 0.25}
+
+  wacc:
+    marginal: {family: normal, p10: 7.5, p50: 8.5, p90: 9.5}
+    loadings: {rate: 0.8, demand: -0.2}
+
+constants:
+  fcff: 55.0
+  normalized_earnings: 50.0
+  shares: 30.0
+  years: 10
+  debt: 120.0
+  cash: 40.0
+  relative_value_per_share: 44.0
+  w_dcf: 50
+  w_epv: 30
+  w_relative: 20

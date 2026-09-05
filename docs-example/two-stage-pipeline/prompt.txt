@@ -1,0 +1,29 @@
+Example prompt - not the one this repository's analyses were produced with.
+See docs-example/README.md.
+
+TARGET: [ticker/name].
+Inputs supplied: ticker and name only.
+
+Attached:
+  A) stage1-research.md     (research - reasoning and ranges)
+  B) stage2-spec-export.md  (export - ranges to a runnable spec)
+
+PREFLIGHT (first line): state whether you have a working tool to retrieve
+current data. If no, stop per file A section 1 - say the valuation cannot be
+completed from a ticker and a name, and output nothing else. Do not estimate
+and do not use remembered figures.
+
+Stage 1 - research per file A. Produce the report in the section 5 format,
+including a worst / base / best triple for every driver the chosen adapter
+requires. A single-point answer is not a valid Stage 1 output.
+
+Stage 2 - export per file B. Map only Stage-1 figures into the spec. No new
+research, no new numbers. Run `valdist validate` and `valdist run` yourself and
+paste the real output; resolve every WARNING and NOTICE, or state why each is
+acceptable.
+
+Write both files into their own folder, named <YYYY-MM-DD>-<TICKER>, with the
+report as .md and the spec as .yaml under the same name.
+
+If Stage 1 cannot be completed, produce neither file - emit only the hard-stop
+line.
