@@ -416,6 +416,41 @@
   .mos-pick button.on { border-color: var(--accent); color: var(--accent);
                         background: color-mix(in srgb, var(--accent) 12%, transparent); }
   .mos-pick .tag { font-size: 12px; }
+  /* The filter sits at the top of the column, centred, because it governs
+     everything below it rather than any one control. */
+  .pf-filter { display: flex; justify-content: center; margin: 0 0 10px; }
+  .pf-filter input {
+    width: 100%; text-align: center; padding: 7px 12px;
+    border-radius: 7px; border: 1px solid var(--line); background: var(--bg);
+    color: var(--fg); font-family: var(--mono); font-size: 13px;
+  }
+  .pf-filter input:focus { outline: none; border-color: var(--accent); }
+  .pf-sel { display: flex; align-items: center; justify-content: center; gap: 7px;
+            flex-wrap: wrap; margin: 0 0 14px; font-size: 13px; color: var(--muted); }
+  .pf-sel button { padding: 4px 12px; font-size: 12.5px; }
+  .pf-sel button.on { border-color: var(--accent); color: var(--accent);
+                      background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .pf-sel .tag { font-size: 12px; }
+  .pf-chip { font-family: var(--mono); font-size: 12px; }
+  .pf-none { font-size: 13px; color: var(--muted); text-align: center;
+             padding: 18px 9px; }
+  .pf-none b { color: var(--fg); font-family: var(--mono); font-weight: 500;
+               word-break: break-all; }
+  /* The dropdown floats over the table rather than pushing it down, so the
+     rows a reader is choosing between do not move while they choose. */
+  .pf-box { position: relative; width: min(460px, 100%); }
+  .pf-suggest { position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+                z-index: 20; background: var(--panel); border: 1px solid var(--line);
+                border-radius: 7px; overflow: hidden; text-align: left;
+                box-shadow: 0 6px 20px rgba(0, 0, 0, .18); }
+  .pf-suggest-item { padding: 7px 11px; cursor: pointer; font-family: var(--mono);
+                     font-size: 13px; }
+  .pf-suggest-item:hover { background: color-mix(in srgb, var(--accent) 14%, transparent);
+                           color: var(--accent); }
+  .pf-suggest-none, .pf-suggest-more { padding: 7px 11px; font-size: 12px;
+                                       color: var(--muted); }
+  .pf-suggest-none b { color: var(--fg); font-family: var(--mono); font-weight: 500;
+                       word-break: break-all; }
   .pf-row { cursor: pointer; }
   .pf-row:hover td { background: color-mix(in srgb, var(--accent) 8%, transparent); }
   .pf-bar { position: relative; height: 9px; border-radius: 5px;
@@ -491,6 +526,29 @@ let drawList = () => {};
 let mosAnchor = "p10", portfolioRows = null, portfolioMeta = null, repriced = null;
 const LAB = { p10: "P10", p25: "P25", p50: "P50", p90: "P90" };
 const STALE_DAYS = 7;
+
+// The portfolio's filter. `pfQuery` is what is being typed into the box, which
+// only ever decides what the box SUGGESTS; `pfPicked` is the filter itself.
+// Keyed by name rather than by row index, because the table re-sorts whenever
+// the anchor changes and a positional pick would then point at a different
+// analysis. Module state, like `mosAnchor` and `repriced`, so a re-anchor (a
+// pure re-render) and a price-basis change (a re-fetch) both leave it alone.
+let pfQuery = "", pfPicked = new Set();
+
+//: How many names the box offers at once. A typeahead that lists all 83 is the
+//: list it exists to replace.
+const SUGGEST_MAX = 8;
+
+// Every whitespace-separated term must appear somewhere in the name, matched
+// case-insensitively. Written once and used by both the sidebar and the
+// portfolio filter: two copies of a matching rule drift, and the weakened one
+// goes unnoticed because the other stays green - `adapters/floors.py`'s
+// reasoning, applied to a string match.
+const queryTerms = q => String(q ?? "").toLowerCase().split(/\s+/).filter(Boolean);
+const nameMatches = (name, q) => {
+  const hay = String(name).toLowerCase();
+  return queryTerms(q).every(t => hay.includes(t));
+};
 
 // Minimal Markdown -> HTML. Deliberately hand-rolled rather than pulling in a
 // library: this viewer stays dependency-free and build-step-free, and the
@@ -605,11 +663,8 @@ function ageInfo(days) {
 }
 
 function renderList(analyses, query, selected, grouped) {
-  const terms = String(query ?? "").toLowerCase().split(/\s+/).filter(Boolean);
-  const hits = analyses.filter(a => {
-    const name = String(a.name).toLowerCase();
-    return terms.every(t => name.includes(t));
-  });
+  const terms = queryTerms(query);
+  const hits = analyses.filter(a => nameMatches(a.name, query));
   const cls = key => `item${key === selected ? " active" : ""}`;
   const row = a => {
     const age = ageInfo(a.age_days);
@@ -860,10 +915,33 @@ function wireMain() {
   // keystroke - that would destroy focus mid-typing.
   $("#main").addEventListener("input", e => {
     if (e.target.id === "price") priceOverride = e.target.value;
+    // The portfolio filter, handled on this delegated listener rather than
+    // re-registered by each paint - and repainting only the body below the
+    // input is what lets the caret survive the keystroke that triggered it.
+    if (e.target.id === "pf-filter") { pfQuery = e.target.value; paintPortfolioBody(); }
   });
   // Enter in the price field runs, which is what typing a price implies.
   $("#main").addEventListener("keydown", e => {
     if (e.target.id === "price" && e.key === "Enter" && !busy) act("run");
+    if (e.target.id === "pf-filter") {
+      // Escape clears the box, exactly as it does in the sidebar's search box.
+      if (e.key === "Escape") { e.target.value = ""; pfQuery = ""; paintPortfolioBody(); }
+      // Enter commits the first suggestion, so a name can be added without
+      // reaching for the mouse. Prevented from submitting anything: this input
+      // is not in a form, and Enter in a search field otherwise reloads in some
+      // browsers, which would drop every chip.
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const first = pfSuggest(portfolioRows || [])[0];
+        if (first) pfAdd(first);
+      }
+      // Backspace on an empty box removes the last chip - the standard gesture
+      // for this control, and the only one that does not require aiming at a
+      // small target.
+      if (e.key === "Backspace" && !e.target.value && pfPicked.size) {
+        pfDrop([...pfPicked][pfPicked.size - 1]);
+      }
+    }
   });
   $("#main").addEventListener("change", e => {
     // Re-render on change (not input): a <select> fires once on commit, so
@@ -894,22 +972,78 @@ async function showPortfolio() {
   }
 }
 
-// Re-anchoring is a pure re-render: every margin came back with the original
-// run, so switching P10/P50/P90 costs nothing and never re-runs the model.
+// The shell, written once per visit. The filter input lives here rather than in
+// the body below it because rewriting an input while it has focus destroys the
+// caret mid-word - the same problem the price field documents in wireMain().
 function paintPortfolio() {
   if (!portfolioRows) return;
-  $("#main").innerHTML = `<h2>All analyses</h2>${renderPortfolio(portfolioRows)}`;
-  $("#main").querySelectorAll(".pf-row").forEach(row =>
+  $("#main").innerHTML = `<h2>All analyses</h2>
+    <div class="pf-filter"><div class="pf-box"><input id="pf-filter" type="search"
+      autocomplete="off" spellcheck="false"
+      placeholder="Type a ticker or date, then click a name to add it">
+      <div id="pf-suggest"></div></div></div>
+    <div id="pf-body"></div>`;
+  // Assigned, not interpolated. `esc()` escapes &, < and > and deliberately not
+  // quotes - every other caller feeds it engine- or filesystem-derived text,
+  // but this is what the reader typed, so a single `"` would close the attribute
+  // and the rest would be parsed as markup. A property assignment has no
+  // parsing step to break out of.
+  $("#pf-filter").value = pfQuery;
+  paintPortfolioBody();
+}
+
+// Re-anchoring is a pure re-render: every margin came back with the original
+// run, so switching P10/P50/P90 costs nothing and never re-runs the model.
+// Filtering and picking are the same kind of thing, which is why all three land
+// here rather than going back to the server.
+//
+// Every listener below is bound on a child of the innerHTML this function has
+// just written, so the previous ones are garbage along with the nodes they sat
+// on. That is `paintPortfolio`'s original pattern, and the reason anchor 20
+// classifies by receiver rather than by caller.
+function paintPortfolioBody() {
+  const body = $("#pf-body"); if (!body) return;
+  const drop = $("#pf-suggest");
+  if (drop) {
+    drop.innerHTML = renderSuggest(portfolioRows);
+    drop.querySelectorAll("[data-pf-add]").forEach(el =>
+      el.addEventListener("click", () => pfAdd(el.dataset.pfAdd)));
+  }
+  body.innerHTML = renderPortfolio(portfolioRows);
+  body.querySelectorAll(".pf-row").forEach(row =>
     row.addEventListener("click", () => select(row.dataset.open)));
-  $("#main").querySelectorAll("[data-anchor]").forEach(b =>
-    b.addEventListener("click", () => { mosAnchor = b.dataset.anchor; paintPortfolio(); }));
+  body.querySelectorAll("[data-pf-chip]").forEach(b =>
+    b.addEventListener("click", () => pfDrop(b.dataset.pfChip)));
+  body.querySelectorAll("[data-pf-clear]").forEach(b =>
+    b.addEventListener("click", () => { pfPicked.clear(); paintPortfolioBody(); }));
+  body.querySelectorAll("[data-anchor]").forEach(b =>
+    b.addEventListener("click", () => { mosAnchor = b.dataset.anchor; paintPortfolioBody(); }));
   // Changing the price basis does need a round trip - a different price is a
   // different run - unlike re-anchoring, which is pure presentation.
-  $("#main").querySelectorAll("[data-basis]").forEach(b =>
+  body.querySelectorAll("[data-basis]").forEach(b =>
     b.addEventListener("click", () => {
       const want = b.dataset.basis === "current";
       if (want !== repriced) { repriced = want; showPortfolio(); }
     }));
+}
+
+// Adding always clears the query with it. The name is now a chip, so leaving the
+// text that found it in the box would leave the box suggesting a name it has
+// already been given - and the reader would have to empty it by hand before
+// searching for the second one.
+function pfAdd(name) {
+  if (!name) return;
+  pfPicked.add(name);
+  pfQuery = "";
+  const box = $("#pf-filter");
+  if (box) box.value = "";
+  paintPortfolioBody();
+}
+
+function pfDrop(name) {
+  if (!name) return;
+  pfPicked.delete(name);
+  paintPortfolioBody();
 }
 
 function paint() {
@@ -1321,21 +1455,79 @@ function renderConvergence(d) {
     }).join("")}</tbody></table>`;
 }
 
+// The chips are the filter, and the only filter. No chips means the whole
+// record; one or more means exactly those. That is what makes the box a
+// multi-select rather than a search: a comparison is built by naming the
+// analyses in it, not by narrowing to a pattern that happens to catch them and
+// nothing else - which, with two runs of one ticker, it usually cannot.
+function pfShown(rows) {
+  return pfPicked.size ? rows.filter(r => pfPicked.has(r.name)) : rows;
+}
+
+// The names the box is offering, in the order it offers them. Data rather than
+// markup, because Enter commits the first one and the wiring has to know what
+// that is without reading it back out of the DOM.
+function pfSuggest(rows) {
+  if (!queryTerms(pfQuery).length) return [];
+  return rows.map(r => r.name).filter(n => !pfPicked.has(n) && nameMatches(n, pfQuery));
+}
+
+// What the box is offering right now. Empty while nothing is typed: a dropdown
+// standing open over the table is a dropdown in the way.
+function renderSuggest(rows) {
+  if (!queryTerms(pfQuery).length) return "";
+  const hits = pfSuggest(rows);
+  if (!hits.length) {
+    return `<div class="pf-suggest"><div class="pf-suggest-none">No analysis matches
+      <b>${esc(pfQuery)}</b></div></div>`;
+  }
+  const shown = hits.slice(0, SUGGEST_MAX);
+  // The remainder is counted rather than dropped. A list silently cut at 8 tells
+  // a reader who typed a broad term that eight is all there is.
+  return `<div class="pf-suggest">${shown.map(n =>
+      `<div class="pf-suggest-item" data-pf-add="${esc(n)}">${esc(n)}</div>`).join("")}${
+    hits.length > shown.length
+      ? `<div class="pf-suggest-more">${hits.length - shown.length} more &ndash; keep
+         typing to narrow</div>`
+      : ""}</div>`;
+}
+
+// The filter, stated in one place and undoable a name at a time.
+function pfBar(picked) {
+  if (!picked.length) {
+    return `<div class="pf-sel"><span class="tag">Type to find an analysis, then
+      click it to add it. Add more than one to compare them.</span></div>`;
+  }
+  return `<div class="pf-sel">
+    <span>${picked.length === 1 ? "Showing" : "Comparing"}</span>
+    ${picked.map(n => `<button class="pf-chip" data-pf-chip="${esc(n)}"
+        title="remove ${esc(n)} from the comparison">${esc(n)} &times;</button>`).join("")}
+    <button data-pf-clear="1">Clear</button>
+  </div>`;
+}
+
 function renderPortfolio(rows) {
   const key = `mos_${mosAnchor}`;
+  const shown = pfShown(rows);
+  const cut = pfPicked.size > 0;
+  const okAll = rows.filter(r => r.status === "ok").length;
+  // `n of N` is what a filter earns, and only then: an undisclosed subset read
+  // as the whole record is the README test-count failure in a rendered view.
+  const count = (n, all) => cut ? `${n} of ${all}` : `${n}`;
   // The ranking follows the anchor, because the anchor is the question being
   // asked. Ranking on P(undervalued) while displaying a P10 margin would put
   // the two most important columns in disagreement on the same row.
-  const ok = rows.filter(r => r.status === "ok")
+  const ok = shown.filter(r => r.status === "ok")
                  .sort((a, b) => (b[key] ?? -Infinity) - (a[key] ?? -Infinity));
-  const bad = rows.filter(r => r.status !== "ok");
+  const bad = shown.filter(r => r.status !== "ok");
 
   // The basis sentence is conditional, and it did not used to be: it claimed
   // "these are the shipped numbers, not re-priced ones" whether or not the table
   // was re-priced. That was already wrong under the toggle; with the current
   // quote as the default it would be the first line on the page, contradicting
   // every row beneath it.
-  let h = `<div class="banner ok"><b>${ok.length} analyses</b>
+  let h = pfBar(rows.filter(r => pfPicked.has(r.name)).map(r => r.name));
+  h += `<div class="banner ok"><b>${count(ok.length, okAll)} analyses</b>
     ${repriced
       ? `Every saved spec, re-run at the latest quote - the price is current, the
          value view is not.`
@@ -1386,7 +1578,13 @@ function renderPortfolio(rows) {
       the price. Re-pricing is not refreshing.</div>`;
   }
 
-  h += `<div class="scroll"><table><thead><tr>
+  // An empty pane is indistinguishable from a broken one, so it never is - the
+  // same rule the sidebar's own filter follows.
+  if (!ok.length && !bad.length) {
+    h += `<div class="pf-none">Nothing to show. Add an analysis with the box above.</div>`;
+  }
+
+  if (ok.length) h += `<div class="scroll"><table><thead><tr>
       <th>Analysis</th><th>Age</th><th>MoS (${LAB[mosAnchor]})</th><th>P(undervalued)</th>
       <th style="width:14%"></th><th>Price</th>
       <th>P10</th><th>P25</th><th>P50</th><th>P90</th><th>Flags</th>
@@ -1451,7 +1649,8 @@ function renderPortfolio(rows) {
     row to open it.</p>`;
 
   if (bad.length) {
-    h += `<div class="banner err"><b>${bad.length} could not be run</b>${
+    h += `<div class="banner err"><b>${
+      count(bad.length, rows.length - okAll)} could not be run</b>${
       bad.map(r => `${esc(r.name)}: ${esc(r.error || r.status)}`).join("<br>")}</div>`;
   }
   return h;

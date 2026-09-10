@@ -37,8 +37,11 @@ exploring the results.
 ```bash
 pip install -e .          # core: numpy, scipy, pydantic, typer, PyYAML
 pip install -e ".[plot]"  # adds matplotlib, only for `valdist plot`
-pytest -q                 # 656 tests, all green
+pytest -q                 # 674 tests, all green
 ```
+
+Tests need **node** on `PATH`: the viewer's render functions run against
+`gui/index.html` itself.
 
 ## Quickstart
 
@@ -141,19 +144,9 @@ model, so there is no separate code path for either.
 ## Viewer
 
 `python -m gui.server` serves a **read-only** page over whatever specs it finds
-in the directory `$VALDIST_ANALYSES` points at (a local default is used if
-unset) – no build step, no JS framework, one HTML file. It runs each spec
-through the same engine the CLI uses and renders:
+in the directory `$VALDIST_ANALYSES` points at.
 
-- **List** – filterable, grouped by ticker when a company has multiple runs.
-- **Run** – percentiles, tornado, warnings, the histogram, and a price ladder
-  showing `P(undervalued)` across a range of prices.
-- **Model** – every driver's marginal next to its factor loadings, and whether
-  the fitted family reproduces the typed p10/p90.
-- **Timeline** – one ticker's runs side by side, so a re-run's change in view
-  is separated from the change in price.
-- **Portfolio** – every analysis as one table, optionally re-priced from
-  `prices/prices.json`.
+--- 
 
 ## Python API
 

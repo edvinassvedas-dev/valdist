@@ -23,7 +23,7 @@ MODULE = "<module>"
 #: Functions the scan must find. Named so that renaming one reddens this anchor
 #: instead of silently shrinking it - the vacuous-pass shape closed in
 #: anchors 14, 16 and 17 (2026-07-26).
-MUST_EXIST = ("boot", "wireMain", "render", "paint", "paintPortfolio")
+MUST_EXIST = ("boot", "wireMain", "render", "paint", "paintPortfolio", "paintPortfolioBody")
 
 #: A top-level function declaration: column 0, because that is this page's style
 #: and nesting implies indentation.
@@ -232,11 +232,18 @@ def test_the_scan_sees_the_real_page() -> None:
     # functions that actually bind listeners, by name. Anchor 19 names cli.py and
     # report.py for the same reason - wiring that moves to a function this scan
     # cannot see would otherwise shrink the check silently.
+    #
+    # `paintPortfolioBody` took the portfolio's bindings off `paintPortfolio`
+    # when the filter arrived: the shell is written once per visit and the body
+    # is repainted per keystroke, so the row, chip and picker listeners are bound
+    # on the children the body has just written. `paintPortfolio` is still named
+    # in MUST_EXIST - it must keep existing - but it binds nothing now, and
+    # asserting that it does would be this anchor policing a page that has moved.
     binders = {r.section for r in regs}
-    assert binders >= {"boot", "wireMain", "paintPortfolio"}, (
+    assert binders >= {"boot", "wireMain", "paintPortfolioBody"}, (
         f"listeners are bound in {sorted(binders)}; expected the scan to find all "
-        "of boot, wireMain and paintPortfolio. If the wiring moved, this anchor is "
-        "now looking somewhere else."
+        "of boot, wireMain and paintPortfolioBody. If the wiring moved, this anchor "
+        "is now looking somewhere else."
     )
 
     lasting = [r for r in regs if r.lasting]

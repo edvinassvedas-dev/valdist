@@ -23,6 +23,7 @@ EXERCISED = (
     "renderList",
     "priceBox",
     "renderPortfolio",
+    "renderSuggest",
     "renderFactors",
     "renderTimeline",
     "renderMarginals",
@@ -61,8 +62,8 @@ globalThis.location = { protocol: "http:", hash: "" };
 const src = fs.readFileSync(appPath, "utf8");
 const api = new Function(src + `
   return { histogram, renderLadder, renderCompare, rangeStrip, renderList,
-           priceBox, renderPortfolio, renderFactors, renderTimeline, renderMarginals,
-           renderValidate, renderRun, renderConvergence, renderWorlds,
+           priceBox, renderPortfolio, renderSuggest, renderFactors, renderTimeline,
+           renderMarginals, renderValidate, renderRun, renderConvergence, renderWorlds,
            setAnchor: v => { mosAnchor = v; },
            // The price basis is module state read by renderPortfolio, exactly as
            // the anchor is. Driving it from here keeps the render function pure
@@ -76,12 +77,18 @@ const api = new Function(src + `
            // renderRun reaches whatIfBanner, which reads cache.analysis for the
            // overridden-price case. Module state, driven exactly as the anchor
            // and the price basis are.
-           setAnalysis: a => { cache.analysis = a; } };`)();
+           setAnalysis: a => { cache.analysis = a; },
+           // The portfolio's typed query and its picked set, module state exactly
+           // as the anchor and the basis are. Driven from here so the two render
+           // functions stay pure in this harness's sense: data in, HTML out.
+           setView: (query, picked) => {
+             pfQuery = query; pfPicked = new Set(picked); } };`)();
 
 const job = JSON.parse(fs.readFileSync(jobPath, "utf8"));
 if (job.anchor) api.setAnchor(job.anchor);
 if (job.basis !== undefined) api.setBasis(job.basis, job.meta ?? null);
 if (job.analysis !== undefined) api.setAnalysis(job.analysis);
+if (job.view !== undefined) api.setView(...job.view);
 process.stdout.write(api[job.fn](...job.args));
 """
 
@@ -125,7 +132,13 @@ def render(tmp_path_factory):
     driver.write_text(_DRIVER, encoding="utf-8")
 
     def call(
-        fn: str, *args, anchor: str | None = None, basis=None, meta=None, analysis=None
+        fn: str,
+        *args,
+        anchor: str | None = None,
+        basis=None,
+        meta=None,
+        analysis=None,
+        view=None,
     ) -> str:
         job = tmp / "job.json"
         payload = {"fn": fn, "args": args, "anchor": anchor}
@@ -134,6 +147,8 @@ def render(tmp_path_factory):
             payload["meta"] = meta
         if analysis is not None:
             payload["analysis"] = analysis
+        if view is not None:
+            payload["view"] = view
         job.write_text(json.dumps(payload), encoding="utf-8")
         done = subprocess.run(  # noqa: S603 - fixed argv, no shell
             [node, str(driver), str(app), str(job)],
@@ -481,7 +496,16 @@ def test_the_staleness_rule_is_written_once(render) -> None:
         "in ageInfo() alone, so the sidebar and the portfolio cannot disagree"
     )
     for caller in ("function renderList", "function renderPortfolio"):
-        body = src[src.index(caller) : src.index(caller) + 4000]
+        # The function's real body, cut at the next column-0 declaration rather
+        # than after a fixed number of characters. A byte window is a proxy for
+        # "this function calls ageInfo()" that stops being one the moment the
+        # function grows past it - which it did, the day the portfolio filter
+        # was added, reddening this case for a reason having nothing to do with
+        # the staleness rule it is about.
+        start = src.index(caller)
+        rest = src[start + len(caller) :]
+        end = re.search(r"^(?:async )?function \w+\(", rest, re.M)
+        body = rest[: end.start()] if end else rest
         assert "ageInfo(" in body, f"{caller} does not use the shared ageInfo()"
 
 
@@ -1577,3 +1601,253 @@ def test_worlds_degrades_rather_than_breaking_on_an_empty_payload(render) -> Non
     html = render("renderWorlds", [], {})
     assert "No worlds" in html
     assert "NaN" not in html and "undefined" not in html
+
+
+# --------------------------------------------------------------------------- #
+# The portfolio filter: a typeahead that picks names, and the chips it makes
+# --------------------------------------------------------------------------- #
+#
+# 83 analyses is more than anyone scans, so the ranking needs a way to be cut
+# down to the handful being weighed against each other. Typing offers names;
+# clicking one adds it as a chip; the chips are the filter, and more than one
+# chip is a comparison.
+#
+# The box only ever decides what is SUGGESTED. That separation is the whole
+# design: a substring filter cannot express "these three", because two runs of
+# one ticker share every substring that finds either of them, and no pattern
+# picks one company from another without also catching whatever else it matches.
+# Naming them does.
+#
+# Two of the cases below are about a claim rather than a mechanism, and they are
+# the ones worth having. A table cut to three rows under a banner still reading
+# "83 analyses" is a false sentence in the most prominent position on the page -
+# the README test-count failure (CLAUDE.md, Change gates) in a rendered view. And
+# a suggestion list silently cut at its cap tells a reader who typed a broad term
+# that eight names is all there is.
+
+
+def _pf(name: str, **over) -> dict:
+    """A portfolio row under a given name.
+
+    Names are redaction codes, never real tickers: this file is tracked, and
+    anchor 22 forbids naming one the private record covers. The first draft used
+    three real tickers, the public gate went green on all of them, and only
+    `VALDIST_ANALYSES=analyses pytest` caught it.
+    """
+    return {**PF_ROW, "name": name, **over}
+
+
+def _shown(html: str) -> list[str]:
+    """The analyses the table actually draws, in the order it draws them."""
+    return re.findall(r'class="pf-row" data-open="([^"]+)"', html)
+
+
+def _offered(html: str) -> list[str]:
+    """The names the suggestion box offers, in the order it offers them."""
+    return re.findall(r'data-pf-add="([^"]+)"', html)
+
+
+def _headline(html: str) -> str:
+    """The banner's bolded count claim, compared whole rather than by substring.
+
+    `"4 analyses" in banner` cannot tell the honest `2 of 4 analyses` from the
+    false `4 analyses`: the first contains the second.
+    """
+    m = re.search(r'<div class="banner ok">\s*<b>(.*?)</b>', html, re.S)
+    assert m, "renderPortfolio drew no bolded count in its headline banner"
+    return re.sub(r"\s+", " ", m.group(1)).strip()
+
+
+#: Four rows whose margins differ, so a case about ordering has something to
+#: order. Two share a ticker, which is the case a substring filter cannot
+#: separate and naming can.
+PF_SET = [
+    _pf("2026-09-05-A31", mos_p10=-0.30),
+    _pf("2026-07-28-A31", mos_p10=-0.10),
+    _pf("2026-08-13-A07", mos_p10=0.40),
+    _pf("2026-09-03-A50", mos_p10=0.20),
+]
+
+
+# --- the box: what it offers ------------------------------------------------
+
+
+def test_the_box_offers_nothing_until_something_is_typed(render) -> None:
+    """A dropdown standing open over the table is a dropdown in the way."""
+    assert render("renderSuggest", PF_SET, view=["", []]).strip() == ""
+
+
+def test_every_typed_term_must_match_a_suggestion(render) -> None:
+    html = render("renderSuggest", PF_SET, view=["2026-09 a31", []])
+    assert _offered(html) == ["2026-09-05-A31"], (
+        "both terms have to match the same name - `2026-09 a31` is not `2026-09` OR `a31`"
+    )
+
+
+def test_the_box_ignores_case(render) -> None:
+    assert _offered(render("renderSuggest", PF_SET, view=["a50", []])) == ["2026-09-03-A50"]
+
+
+def test_the_box_offers_both_runs_of_a_ticker(render) -> None:
+    assert _offered(render("renderSuggest", PF_SET, view=["a31", []])) == [
+        "2026-09-05-A31",
+        "2026-07-28-A31",
+    ]
+
+
+def test_a_name_already_added_is_not_offered_again(render) -> None:
+    html = render("renderSuggest", PF_SET, view=["a31", ["2026-09-05-A31"]])
+    assert _offered(html) == ["2026-07-28-A31"]
+
+
+def test_a_query_that_matches_nothing_says_so(render) -> None:
+    """An empty dropdown is indistinguishable from a broken one, so it never is."""
+    html = render("renderSuggest", PF_SET, view=["zzz", []])
+    assert _offered(html) == []
+    assert "No analysis matches" in html
+    assert "zzz" in html, "the query has to be echoed, or it cannot be corrected"
+
+
+def test_the_typed_query_is_escaped_in_the_suggestions(render) -> None:
+    html = render("renderSuggest", PF_SET, view=["<script>x", []])
+    assert "<script>" not in html, "the typed query was echoed as markup"
+    assert "&lt;script&gt;" in html, "the typed query was not echoed at all"
+
+
+def test_a_capped_list_says_how_many_it_is_not_showing(render) -> None:
+    many = [_pf(f"2026-01-{d:02d}-A{d:02d}") for d in range(1, 21)]
+    html = render("renderSuggest", many, view=["2026", []])
+    offered = _offered(html)
+
+    assert len(offered) == 8, f"the cap is not being applied: {len(offered)} offered"
+    flat = re.sub(r"\s+", " ", re.sub(r"<[^>]*>", " ", html))
+    assert "12 more" in flat, f"the box does not say what it is hiding: {flat!r}"
+
+
+# --- the chips: what they filter to -----------------------------------------
+
+
+def test_no_chips_shows_the_whole_record(render) -> None:
+    html = render("renderPortfolio", PF_SET, basis=False, meta=PF_META, view=["", []])
+    assert len(_shown(html)) == 4
+    assert _headline(html) == "4 analyses", (
+        f"nothing is hidden, so there is nothing to disclose - got {_headline(html)!r}"
+    )
+
+
+def test_the_table_shows_exactly_the_chipped_names(render) -> None:
+    html = render(
+        "renderPortfolio",
+        PF_SET,
+        basis=False,
+        meta=PF_META,
+        view=["a31", ["2026-08-13-A07", "2026-09-03-A50"]],
+    )
+    assert set(_shown(html)) == {"2026-08-13-A07", "2026-09-03-A50"}, (
+        "the typed query is still deciding rows; it must only decide suggestions"
+    )
+
+
+def test_the_banner_does_not_claim_the_whole_record_over_a_filtered_table(render) -> None:
+    html = render(
+        "renderPortfolio", PF_SET, basis=False, meta=PF_META, view=["", ["2026-08-13-A07"]]
+    )
+    assert _headline(html) == "1 of 4 analyses", (
+        f"the banner claims {_headline(html)!r} over a table of 1. A banner that "
+        "names the whole record above a filtered table is the README test-count "
+        "failure in a rendered view - a number read as current because nothing "
+        "about it looks stale."
+    )
+
+
+def test_the_chips_keep_the_ranking_they_were_built_from(render) -> None:
+    picked = ["2026-09-05-A31", "2026-08-13-A07", "2026-09-03-A50"]
+    html = render(
+        "renderPortfolio", PF_SET, anchor="p10", basis=False, meta=PF_META, view=["", picked]
+    )
+    assert _shown(html) == ["2026-08-13-A07", "2026-09-03-A50", "2026-09-05-A31"], (
+        "the chips re-ordered the rows; they must rank by the current anchor, "
+        "descending, exactly as the full table does"
+    )
+
+
+def test_every_chip_is_listed_and_removable(render) -> None:
+    picked = ["2026-09-05-A31", "2026-08-13-A07"]
+    html = render("renderPortfolio", PF_SET, basis=False, meta=PF_META, view=["", picked])
+    assert set(re.findall(r'data-pf-chip="([^"]+)"', html)) == set(picked)
+    assert 'data-pf-clear="1"' in html, "there is no way to drop the whole filter at once"
+
+
+def test_an_empty_portfolio_says_so_rather_than_drawing_an_empty_table(render) -> None:
+    """Unreachable while chips come from real rows, and still not a blank result."""
+    html = render("renderPortfolio", [], basis=False, meta=PF_META, view=["", []])
+    assert _shown(html) == []
+    assert "Nothing to show" in html
+
+
+def test_the_failed_rows_banner_narrows_with_the_chips_and_keeps_its_count_honest(
+    render,
+) -> None:
+    rows = [
+        _pf("2026-08-13-A07"),
+        {"name": "2026-09-05-A31", "status": "error", "error": "SpecError: bad"},
+        {"name": "2026-09-03-A50", "status": "error", "error": "SpecError: worse"},
+    ]
+    html = render("renderPortfolio", rows, basis=False, meta=PF_META, view=["", ["2026-09-05-A31"]])
+
+    assert "2026-09-05-A31" in html
+    assert "2026-09-03-A50" not in html, (
+        "the failures banner still lists a name the filter excluded"
+    )
+    flat = re.sub(r"\s+", " ", re.sub(r"<[^>]*>", " ", html))
+    assert "1 of 2 could not be run" in flat, (
+        f"the narrowed failures banner does not say it is narrowed: {flat[:400]!r}"
+    )
+
+
+def test_an_unfiltered_failures_banner_states_the_plain_count(render) -> None:
+    """Nothing hidden, nothing to disclose - the same rule as the headline banner."""
+    rows = [
+        _pf("2026-08-13-A07"),
+        {"name": "2026-09-05-A31", "status": "error", "error": "SpecError: bad"},
+    ]
+    html = render("renderPortfolio", rows, basis=False, meta=PF_META, view=["", []])
+    flat = re.sub(r"\s+", " ", re.sub(r"<[^>]*>", " ", html))
+    assert "1 could not be run" in flat
+    assert "1 of 1 could not be run" not in flat
+
+
+# --- the box's own wiring, checkable as source only -------------------------
+
+
+def test_the_typed_query_is_refilled_by_property_not_by_writing_html() -> None:
+    """The box's value is assigned, never interpolated into markup.
+
+    `esc()` escapes `&`, `<` and `>` and deliberately not quotes, which is fine
+    for every other caller: they interpolate engine- or filesystem-derived text.
+    `pfQuery` is typed by the reader, so a single `"` would close the attribute
+    it sat in and the rest of the query would be parsed as markup. Assigning
+    `.value` has no parsing step to break out of.
+    """
+    src = _script_source()
+
+    assert not re.search(r'=\s*"\$\{[^"}]*pfQuery', src), (
+        "the typed query is interpolated into a quoted HTML attribute - a typed "
+        "double quote would close it, because esc() does not escape quotes"
+    )
+    assert re.search(r'\$\("#pf-filter"\)\.value\s*=', src), (
+        "nothing refills the box, so a price-basis change - which rebuilds the "
+        "shell - would drop the reader's query while still showing its chips"
+    )
+
+
+def test_adding_a_name_clears_the_box() -> None:
+    src = _script_source()
+    body = src[src.index("function pfAdd(") :]
+    body = body[: body.index("\nfunction ")]
+
+    assert 'pfQuery = ""' in body, "pfAdd does not clear the query state"
+    assert re.search(r'box\.value\s*=\s*""', body), (
+        "pfAdd clears the state but not the input, so the box would still show "
+        "the text that found a name already added"
+    )
