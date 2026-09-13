@@ -37,7 +37,7 @@ exploring the results.
 ```bash
 pip install -e .          # core: numpy, scipy, pydantic, typer, PyYAML
 pip install -e ".[plot]"  # adds matplotlib, only for `valdist plot`
-pytest -q                 # 674 tests, all green
+pytest -q                 # 684 tests, all green
 ```
 
 Tests need **node** on `PATH`: the viewer's render functions run against

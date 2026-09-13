@@ -1817,6 +1817,39 @@ def test_an_unfiltered_failures_banner_states_the_plain_count(render) -> None:
     assert "1 of 1 could not be run" not in flat
 
 
+# --- specs not run yet -------------------------------------------------------
+
+PF_PENDING = [
+    _pf("2026-08-13-A07"),
+    {"name": "2026-09-05-A31", "status": "not run"},
+    {"name": "2026-09-03-A50", "status": "not run"},
+]
+
+
+def test_specs_not_run_are_offered_a_run_not_reported_as_failures(render) -> None:
+    html = render("renderPortfolio", PF_PENDING, basis=False, meta=PF_META, view=["", []])
+    assert "could not be run" not in html
+    assert _shown(html) == ["2026-08-13-A07"]
+    assert re.search(r'data-pf-run="1"[^>]*>\s*Run all \(2\)', html)
+
+
+def test_nothing_left_to_run_offers_no_run_button(render) -> None:
+    html = render("renderPortfolio", PF_SET, basis=False, meta=PF_META, view=["", []])
+    assert "data-pf-run" not in html
+
+
+def test_the_banner_does_not_claim_every_spec_while_some_are_not_run(render) -> None:
+    html = render("renderPortfolio", PF_PENDING, basis=False, meta=PF_META, view=["", []])
+    assert "Every saved spec" not in html
+
+
+def test_a_view_with_nothing_run_does_not_say_nothing_to_show(render) -> None:
+    rows = [r for r in PF_PENDING if r["status"] == "not run"]
+    html = render("renderPortfolio", rows, basis=False, meta=PF_META, view=["", []])
+    assert "Nothing to show" not in html
+    assert "Run all (2)" in html
+
+
 # --- the box's own wiring, checkable as source only -------------------------
 
 

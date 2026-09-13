@@ -195,6 +195,37 @@ def test_a_cached_key_is_not_recomputed() -> None:
     assert len(calls) == 1
 
 
+@pytest.fixture
+def stubbed_runs(monkeypatch):
+    import gui.server as gs
+
+    ran = []
+    monkeypatch.setattr(
+        gs, "_one_row", lambda name, *_: ran.append(name) or {"name": name, "status": "ok"}
+    )
+    gs.clear_portfolio_cache()
+    yield ran
+    gs.clear_portfolio_cache()
+
+
+def test_a_cache_only_portfolio_runs_nothing(stubbed_runs) -> None:
+    from gui.server import do_portfolio
+
+    rows = do_portfolio(repriced=False, run=False)["portfolio"]
+    assert stubbed_runs == []
+    assert rows and {r["status"] for r in rows} == {"not run"}
+
+
+def test_a_cache_only_portfolio_returns_what_a_run_cached(stubbed_runs) -> None:
+    from gui.server import do_portfolio
+
+    do_portfolio(repriced=False, run=True)
+    ran = len(stubbed_runs)
+    rows = do_portfolio(repriced=False, run=False)["portfolio"]
+    assert ran and len(stubbed_runs) == ran
+    assert {r["status"] for r in rows} == {"ok"}
+
+
 def test_concurrent_cold_misses_compute_once() -> None:
     """Three threads, one cold key, one computation."""
     import threading
@@ -605,6 +636,40 @@ def test_re_reading_a_quote_does_not_cost_a_model_run(one_analysis) -> None:
         "a changed quote added a cache entry, so the row was recomputed - that "
         "is a full 50,000-draw run per analysis on every price refresh"
     )
+
+
+def test_a_manual_run_at_the_spec_price_fills_the_as_analysed_row(one_analysis) -> None:
+    import gui.server as gs
+
+    name, quoted, _ = one_analysis
+    quoted(123.45, "2026-07-30", False)
+    gs.clear_portfolio_cache()
+    gs.do_run(name)
+    filled = gs._portfolio_rows(False, run=False)["portfolio"][0]
+    gs.clear_portfolio_cache()
+    assert filled == gs._portfolio_rows(False)["portfolio"][0]
+
+
+def test_a_manual_run_at_the_quote_fills_the_current_row(one_analysis) -> None:
+    import gui.server as gs
+
+    name, quoted, _ = one_analysis
+    quoted(123.45, "2026-07-30", False)
+    gs.clear_portfolio_cache()
+    gs.do_run(name, 123.45)
+    row = gs._portfolio_rows(True, run=False)["portfolio"][0]
+    assert (row["status"], row["price"], row["repriced"]) == ("ok", 123.45, True)
+
+
+def test_a_what_if_run_fills_no_row(one_analysis) -> None:
+    import gui.server as gs
+
+    name, quoted, _ = one_analysis
+    quoted(123.45, "2026-07-30", False)
+    gs.clear_portfolio_cache()
+    gs.do_run(name, 999.0)
+    assert gs._portfolio_rows(True, run=False)["portfolio"][0]["status"] == "not run"
+    assert gs._portfolio_rows(False, run=False)["portfolio"][0]["status"] == "not run"
 
 
 # --------------------------------------------------------------------------- #

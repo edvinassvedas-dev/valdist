@@ -166,6 +166,7 @@ def do_run(name: str, price: float | None = None) -> dict:
     spec, model = _load_and_hydrate(name)
     used = spec.price if price is None else price
     result = model.run(n=spec.n, price=used, seed=spec.seed, nu=spec.nu)
+    _remember_run(name, spec, result, used)
     payload = json.loads(report.to_json(result))
     return {
         "payload": payload,
@@ -186,6 +187,20 @@ def do_run(name: str, price: float | None = None) -> dict:
         # `to_json()` would bump the report schema for something no report needs.
         "sensitivity": _sensitivity(spec, model),
     }
+
+
+def _remember_run(name: str, spec, result, used: float) -> None:
+    ticker = _ticker_of(name)
+    quote = read_current_prices()["prices"].get(ticker) if ticker else None
+    as_of, age = _dated(name)
+    bases = []
+    if used == spec.price:
+        bases.append((None, False))
+    if quote and used == quote["price"]:
+        bases.append((used, True))
+    for key_price, repriced in bases:
+        row = _row_from_result(name, ticker, as_of, age, spec, result, used, repriced)
+        _put_row(_row_key(name, key_price, repriced), row)
 
 
 def _sensitivity(spec, model) -> dict:
@@ -349,12 +364,16 @@ def _cached_row(key: tuple, compute) -> dict:
             # wedge that key for the life of the process.
             with _CACHE_LOCK:
                 _INFLIGHT.pop(key, None)
-        with _CACHE_LOCK:
-            _PORTFOLIO_CACHE[key] = row
-            _PORTFOLIO_CACHE.move_to_end(key)
-            while len(_PORTFOLIO_CACHE) > _PORTFOLIO_CACHE_MAX:
-                _PORTFOLIO_CACHE.popitem(last=False)
+        _put_row(key, row)
         return row
+
+
+def _put_row(key: tuple, row: dict) -> None:
+    with _CACHE_LOCK:
+        _PORTFOLIO_CACHE[key] = row
+        _PORTFOLIO_CACHE.move_to_end(key)
+        while len(_PORTFOLIO_CACHE) > _PORTFOLIO_CACHE_MAX:
+            _PORTFOLIO_CACHE.popitem(last=False)
 
 
 #: Written by `python -m prices.fetch`. Read-only, and never imported from -
@@ -427,13 +446,18 @@ def _dated(name: str) -> tuple[str | None, int | None]:
     return as_of, (_dt.date.today() - _dt.date.fromisoformat(as_of)).days
 
 
-def do_portfolio(repriced: bool | None = None) -> dict:
-    """Every analysis, run, as one comparable table."""
-    return _portfolio_rows(repriced)
+def do_portfolio(repriced: bool | None = None, run: bool = True) -> dict:
+    """Every analysis as one comparable table; `run=False` reads the cache only."""
+    return _portfolio_rows(repriced, run)
 
 
-def _portfolio_rows(repriced: bool | None) -> dict:
-    """Every analysis, run, as one comparable table."""
+def _peek_row(key: tuple) -> dict | None:
+    with _CACHE_LOCK:
+        return _PORTFOLIO_CACHE.get(key)
+
+
+def _portfolio_rows(repriced: bool | None, run: bool = True) -> dict:
+    """Every analysis as one comparable table; `run=False` reads the cache only."""
     current = read_current_prices()
     # Resolved against the quotes themselves rather than `available`, which is
     # true for a file that parsed and says nothing about whether it holds any
@@ -457,11 +481,15 @@ def _portfolio_rows(repriced: bool | None) -> dict:
         as_of, age = entry["as_of"], entry["age_days"]
 
         price = quote["price"] if use_current else None
-        row = _cached_row(
-            _row_key(name, price, use_current),
-            lambda: _one_row(name, ticker, as_of, age, price, use_current),
-        )
-        rows.append(_with_quote(row, quote))
+        key = _row_key(name, price, use_current)
+        if run:
+            row = _cached_row(key, lambda: _one_row(name, ticker, as_of, age, price, use_current))
+        else:
+            row = _peek_row(key)
+        if row is None:
+            rows.append({"name": name, "status": "not run"})
+        else:
+            rows.append(_with_quote(row, quote))
     return {"portfolio": rows, "current": current, "repriced": repriced}
 
 
@@ -489,59 +517,63 @@ def _one_row(name, ticker, as_of, age, price, repriced) -> dict:
         spec, model = _load_and_hydrate(name)
         price = spec.price if price is None else price
         result = model.run(n=spec.n, price=price, seed=spec.seed, nu=spec.nu)
-        q, mos = result.value_quantiles(ANCHOR_QS), result.margin_of_safety(ANCHOR_QS)
-        return {
-            "name": name,
-            "status": "ok",
-            "adapter": spec.valuation,
-            "price": price,
-            "spec_price": spec.price,
-            "ticker": ticker,
-            "as_of": as_of,
-            "age_days": age,
-            "repriced": repriced,
-            # The quote's own fields aren't set here - `_with_quote` overlays
-            # them after the cache lookup, because they can change without
-            # anything in the key changing. See that function.
-            "p_undervalued": result.p_undervalued,
-            "stderr": result.p_undervalued_stderr,
-            "value_p10": q[0.1],
-            "value_p25": q[0.25],
-            "value_p50": q[0.5],
-            "value_p90": q[0.9],
-            # All three margins, so the UI can re-anchor without re-running.
-            # P10 is the one a margin-of-safety framework exists to protect:
-            # a name can look fine on the median and still carry a brutal
-            # downside.
-            "mos_p10": mos[0.1],
-            "mos_p25": mos[0.25],
-            "mos_p50": mos[0.5],
-            "mos_p90": mos[0.9],
-            "warnings": len(result.warnings()),
-            # What the row has to declare, not just how much: these are not
-            # results, and the ranking is where that has to be legible - a
-            # count of 2 cannot distinguish "a meaningless tail" from "this
-            # whole number is an artefact".
-            #
-            # Every field comes off the result, the rate text in particular,
-            # because a spec that floors draws often fires on well under 5 of
-            # 50,000 and a consumer formatting the rate itself would print
-            # "0.00%" for them. That is the disclosure saying nothing.
-            "diagnostics": [
-                {
-                    "name": flag_name,
-                    "count": count,
-                    "rate": result.diagnostic_rate(flag_name),
-                    "rate_text": result.diagnostic_rate_text(flag_name),
-                }
-                for flag_name, count in sorted(result.diagnostics.items())
-            ],
-            "degenerate": result.degenerate(),
-        }
+        return _row_from_result(name, ticker, as_of, age, spec, result, price, repriced)
     except Exception as exc:
         # Cached like any other row: a broken spec is a stable answer until the
         # file changes, and the mtime is already in the key.
         return {"name": name, "status": "error", "error": f"{type(exc).__name__}: {exc}"}
+
+
+def _row_from_result(name, ticker, as_of, age, spec, result, price, repriced) -> dict:
+    q, mos = result.value_quantiles(ANCHOR_QS), result.margin_of_safety(ANCHOR_QS)
+    return {
+        "name": name,
+        "status": "ok",
+        "adapter": spec.valuation,
+        "price": price,
+        "spec_price": spec.price,
+        "ticker": ticker,
+        "as_of": as_of,
+        "age_days": age,
+        "repriced": repriced,
+        # The quote's own fields aren't set here - `_with_quote` overlays
+        # them after the cache lookup, because they can change without
+        # anything in the key changing. See that function.
+        "p_undervalued": result.p_undervalued,
+        "stderr": result.p_undervalued_stderr,
+        "value_p10": q[0.1],
+        "value_p25": q[0.25],
+        "value_p50": q[0.5],
+        "value_p90": q[0.9],
+        # All three margins, so the UI can re-anchor without re-running.
+        # P10 is the one a margin-of-safety framework exists to protect:
+        # a name can look fine on the median and still carry a brutal
+        # downside.
+        "mos_p10": mos[0.1],
+        "mos_p25": mos[0.25],
+        "mos_p50": mos[0.5],
+        "mos_p90": mos[0.9],
+        "warnings": len(result.warnings()),
+        # What the row has to declare, not just how much: these are not
+        # results, and the ranking is where that has to be legible - a
+        # count of 2 cannot distinguish "a meaningless tail" from "this
+        # whole number is an artefact".
+        #
+        # Every field comes off the result, the rate text in particular,
+        # because a spec that floors draws often fires on well under 5 of
+        # 50,000 and a consumer formatting the rate itself would print
+        # "0.00%" for them. That is the disclosure saying nothing.
+        "diagnostics": [
+            {
+                "name": flag_name,
+                "count": count,
+                "rate": result.diagnostic_rate(flag_name),
+                "rate_text": result.diagnostic_rate_text(flag_name),
+            }
+            for flag_name, count in sorted(result.diagnostics.items())
+        ],
+        "degenerate": result.degenerate(),
+    }
 
 
 def do_compare(name_a: str, name_b: str) -> dict:
@@ -769,7 +801,9 @@ ROUTES = {
     "/api/timeline": lambda q: do_timeline(_named(q, "ticker")),
     "/api/worlds": lambda q: do_worlds(_name(q)),
     "/api/convergence": lambda q: do_convergence(_name(q)),
-    "/api/portfolio": lambda q: do_portfolio(_tristate(q, "repriced")),
+    "/api/portfolio": lambda q: do_portfolio(
+        _tristate(q, "repriced"), _tristate(q, "run") is not False
+    ),
     "/api/compare": lambda q: do_compare(_named(q, "a"), _named(q, "b")),
 }
 

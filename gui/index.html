@@ -950,19 +950,23 @@ function wireMain() {
   });
 }
 
-async function showPortfolio() {
+async function showPortfolio(run = false) {
   if (busy) return;
+  const pending = (portfolioRows || []).filter(r => r.status === "not run").length;
   current = null; selected = PORTFOLIO; cache = {}; compareWith = "";
   drawList();
   $("#main").innerHTML = `<h2>All analyses</h2>
-    <div class="tagline">Running every saved spec. First visit takes a few
-    seconds; results are cached per spec until the file changes.</div>`;
+    <div class="tagline">${run
+      ? `Running ${pending} specs not run yet, about a second each.`
+      : "Loading cached results."}</div>`;
   try {
     // Nothing sent while the basis is unchosen; "0" sent explicitly once it is,
     // because an omitted parameter is what asks for the default and would
     // silently undo a deliberate "As analysed".
-    const d = await api("/api/portfolio",
-      repriced === null ? {} : { repriced: repriced ? "1" : "0" });
+    const d = await api("/api/portfolio", {
+      run: run ? "1" : "0",
+      ...(repriced === null ? {} : { repriced: repriced ? "1" : "0" }),
+    });
     portfolioRows = d.portfolio; portfolioMeta = d;
     repriced = d.repriced;
     paintPortfolio();
@@ -1016,6 +1020,8 @@ function paintPortfolioBody() {
     b.addEventListener("click", () => pfDrop(b.dataset.pfChip)));
   body.querySelectorAll("[data-pf-clear]").forEach(b =>
     b.addEventListener("click", () => { pfPicked.clear(); paintPortfolioBody(); }));
+  body.querySelectorAll("[data-pf-run]").forEach(b =>
+    b.addEventListener("click", () => showPortfolio(true)));
   body.querySelectorAll("[data-anchor]").forEach(b =>
     b.addEventListener("click", () => { mosAnchor = b.dataset.anchor; paintPortfolioBody(); }));
   // Changing the price basis does need a round trip - a different price is a
@@ -1511,6 +1517,8 @@ function renderPortfolio(rows) {
   const shown = pfShown(rows);
   const cut = pfPicked.size > 0;
   const okAll = rows.filter(r => r.status === "ok").length;
+  const pendingAll = rows.filter(r => r.status === "not run").length;
+  const scope = pendingAll ? "Each spec run so far" : "Every saved spec";
   // `n of N` is what a filter earns, and only then: an undisclosed subset read
   // as the whole record is the README test-count failure in a rendered view.
   const count = (n, all) => cut ? `${n} of ${all}` : `${n}`;
@@ -1519,7 +1527,7 @@ function renderPortfolio(rows) {
   // the two most important columns in disagreement on the same row.
   const ok = shown.filter(r => r.status === "ok")
                  .sort((a, b) => (b[key] ?? -Infinity) - (a[key] ?? -Infinity));
-  const bad = shown.filter(r => r.status !== "ok");
+  const bad = shown.filter(r => r.status !== "ok" && r.status !== "not run");
 
   // The basis sentence is conditional, and it did not used to be: it claimed
   // "these are the shipped numbers, not re-priced ones" whether or not the table
@@ -1527,11 +1535,16 @@ function renderPortfolio(rows) {
   // quote as the default it would be the first line on the page, contradicting
   // every row beneath it.
   let h = pfBar(rows.filter(r => pfPicked.has(r.name)).map(r => r.name));
+  if (pendingAll) {
+    h += `<div class="pf-sel"><span><b>${pendingAll} of ${rows.length}</b> not run
+      yet, about a second each; results stay cached until a spec changes.</span>
+      <button data-pf-run="1">Run all (${pendingAll})</button></div>`;
+  }
   h += `<div class="banner ok"><b>${count(ok.length, okAll)} analyses</b>
     ${repriced
-      ? `Every saved spec, re-run at the latest quote - the price is current, the
+      ? `${scope}, re-run at the latest quote - the price is current, the
          value view is not.`
-      : `Every saved spec, run at its own spec price and seed - these are the
+      : `${scope}, run at its own spec price and seed - these are the
          shipped numbers, not re-priced ones.`} Ranked by margin of safety at
     <strong>${LAB[mosAnchor]}</strong>.${mosAnchor === "p10"
       ? " P10 is the default because margin of safety is a question about the"
@@ -1580,7 +1593,7 @@ function renderPortfolio(rows) {
 
   // An empty pane is indistinguishable from a broken one, so it never is - the
   // same rule the sidebar's own filter follows.
-  if (!ok.length && !bad.length) {
+  if (!shown.length) {
     h += `<div class="pf-none">Nothing to show. Add an analysis with the box above.</div>`;
   }
 
@@ -1650,7 +1663,7 @@ function renderPortfolio(rows) {
 
   if (bad.length) {
     h += `<div class="banner err"><b>${
-      count(bad.length, rows.length - okAll)} could not be run</b>${
+      count(bad.length, rows.length - okAll - pendingAll)} could not be run</b>${
       bad.map(r => `${esc(r.name)}: ${esc(r.error || r.status)}`).join("<br>")}</div>`;
   }
   return h;

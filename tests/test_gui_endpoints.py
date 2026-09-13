@@ -164,6 +164,15 @@ def test_portfolio_returns_a_row_per_analysis(base_url) -> None:
     assert all("status" in row for row in body["portfolio"])
 
 
+def test_portfolio_with_run_0_reads_the_cache_only(base_url) -> None:
+    from gui.server import clear_portfolio_cache
+
+    clear_portfolio_cache()
+    status, body, _ = get(f"{base_url}/api/portfolio?run=0&repriced=0")
+    assert status == 200
+    assert {row["status"] for row in body["portfolio"]} == {"not run"}
+
+
 def test_compare_needs_both_sides(base_url, a_real_analysis) -> None:
     status, body, _ = get(f"{base_url}/api/compare?a={a_real_analysis}")
     assert status == 400
