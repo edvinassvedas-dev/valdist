@@ -4,11 +4,12 @@
 
 ## [Unreleased]
 
-Test suite: 656 -> 684
+Test suite: 656 -> 691
 
 ### Added
 
 - Viewer: multi-select filter on the **All analyses** table.
+- Viewer: checkboxes in the analysis list, and **Run selected** on **All analyses**.
 
 ### Changed
 

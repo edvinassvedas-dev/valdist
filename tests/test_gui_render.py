@@ -1850,6 +1850,37 @@ def test_a_view_with_nothing_run_does_not_say_nothing_to_show(render) -> None:
     assert "Run all (2)" in html
 
 
+# --- picking in the sidebar, running a selection ------------------------------
+
+
+def test_every_listed_analysis_has_a_checkbox_showing_the_selection(render) -> None:
+    html = render("renderList", LISTING, "", None, view=["", ["2026-07-28-VICI"]])
+    assert re.findall(r'data-pick="([^"]+)"', html) == [a["name"] for a in LISTING]
+    assert re.findall(r'data-pick="([^"]+)" checked', html) == ["2026-07-28-VICI"]
+
+
+def test_run_selected_counts_the_picked_specs_not_run_yet(render) -> None:
+    picked = ["2026-09-05-A31", "2026-08-13-A07"]
+    html = render("renderPortfolio", PF_PENDING, basis=False, meta=PF_META, view=["", picked])
+    button = re.search(r"<button data-pf-run-selected[^>]*>[^<]*</button>", html)
+    assert button and "Run selected (1)" in button.group(0)
+    assert "disabled" not in button.group(0)
+
+
+def test_run_selected_is_disabled_until_something_is_picked(render) -> None:
+    html = render("renderPortfolio", PF_PENDING, basis=False, meta=PF_META, view=["", []])
+    button = re.search(r"<button data-pf-run-selected[^>]*>", html)
+    assert button and "disabled" in button.group(0)
+
+
+def test_ticking_a_checkbox_does_not_open_the_analysis() -> None:
+    src = _script_source()
+    handler = src[src.index('$("#list").addEventListener("click"') :]
+    handler = handler[: handler.index("\n  });")]
+    pick, item = handler.find('closest("[data-pick]")'), handler.find('closest(".item")')
+    assert 0 <= pick < item, "the checkbox branch must run, and return, before a row opens"
+
+
 # --- the box's own wiring, checkable as source only -------------------------
 
 

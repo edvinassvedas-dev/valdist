@@ -173,6 +173,12 @@ def test_portfolio_with_run_0_reads_the_cache_only(base_url) -> None:
     assert {row["status"] for row in body["portfolio"]} == {"not run"}
 
 
+def test_portfolio_names_must_exist(base_url) -> None:
+    status, body, _ = get(f"{base_url}/api/portfolio?names=no-such-analysis")
+    assert status == 404
+    assert "no-such-analysis" in body["error"]
+
+
 def test_compare_needs_both_sides(base_url, a_real_analysis) -> None:
     status, body, _ = get(f"{base_url}/api/compare?a={a_real_analysis}")
     assert status == 400

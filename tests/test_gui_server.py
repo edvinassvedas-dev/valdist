@@ -226,6 +226,24 @@ def test_a_cache_only_portfolio_returns_what_a_run_cached(stubbed_runs) -> None:
     assert {r["status"] for r in rows} == {"ok"}
 
 
+def test_a_named_run_computes_only_the_named_specs(stubbed_runs) -> None:
+    from gui.server import do_portfolio, list_analyses
+
+    name = next(e["name"] for e in list_analyses() if e["has_yaml"])
+    rows = do_portfolio(repriced=False, names=[name])["portfolio"]
+    assert stubbed_runs == [name]
+    assert [r["name"] for r in rows if r["status"] == "ok"] == [name]
+    assert {r["status"] for r in rows if r["name"] != name} == {"not run"}
+
+
+def test_a_named_run_refuses_an_unknown_name(stubbed_runs) -> None:
+    from gui.server import do_portfolio
+
+    with pytest.raises(KeyError, match="no-such-analysis"):
+        do_portfolio(repriced=False, names=["no-such-analysis"])
+    assert stubbed_runs == []
+
+
 def test_concurrent_cold_misses_compute_once() -> None:
     """Three threads, one cold key, one computation."""
     import threading

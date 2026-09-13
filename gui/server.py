@@ -446,9 +446,11 @@ def _dated(name: str) -> tuple[str | None, int | None]:
     return as_of, (_dt.date.today() - _dt.date.fromisoformat(as_of)).days
 
 
-def do_portfolio(repriced: bool | None = None, run: bool = True) -> dict:
-    """Every analysis as one comparable table; `run=False` reads the cache only."""
-    return _portfolio_rows(repriced, run)
+def do_portfolio(
+    repriced: bool | None = None, run: bool = True, names: list[str] | None = None
+) -> dict:
+    """Every analysis as one comparable table; only `names` are run when given."""
+    return _portfolio_rows(repriced, run, names)
 
 
 def _peek_row(key: tuple) -> dict | None:
@@ -456,8 +458,14 @@ def _peek_row(key: tuple) -> dict | None:
         return _PORTFOLIO_CACHE.get(key)
 
 
-def _portfolio_rows(repriced: bool | None, run: bool = True) -> dict:
-    """Every analysis as one comparable table; `run=False` reads the cache only."""
+def _portfolio_rows(
+    repriced: bool | None, run: bool = True, names: list[str] | None = None
+) -> dict:
+    """Every analysis as one comparable table; only `names` are run when given."""
+    listing = list_analyses()
+    unknown = sorted(set(names or ()) - {e["name"] for e in listing})
+    if unknown:
+        raise KeyError(f"unknown analysis: {unknown[0]!r}")
     current = read_current_prices()
     # Resolved against the quotes themselves rather than `available`, which is
     # true for a file that parsed and says nothing about whether it holds any
@@ -466,7 +474,7 @@ def _portfolio_rows(repriced: bool | None, run: bool = True) -> dict:
     if repriced is None:
         repriced = bool(current["prices"])
     rows = []
-    for entry in list_analyses():
+    for entry in listing:
         name = entry["name"]
         if not entry["has_yaml"]:
             rows.append({"name": name, "status": "no spec"})
@@ -482,7 +490,7 @@ def _portfolio_rows(repriced: bool | None, run: bool = True) -> dict:
 
         price = quote["price"] if use_current else None
         key = _row_key(name, price, use_current)
-        if run:
+        if run and (names is None or name in names):
             row = _cached_row(key, lambda: _one_row(name, ticker, as_of, age, price, use_current))
         else:
             row = _peek_row(key)
@@ -791,6 +799,13 @@ def _named(query: dict, key: str) -> str:
     return values[0]
 
 
+def _names(query: dict) -> list[str] | None:
+    values = query.get("names") or []
+    if not values or not values[0].strip():
+        return None
+    return [n for n in values[0].split(",") if n]
+
+
 ROUTES = {
     "/api/analyses": lambda q: {"analyses": list_analyses()},
     "/api/analysis": lambda q: read_analysis(_name(q)),
@@ -802,7 +817,7 @@ ROUTES = {
     "/api/worlds": lambda q: do_worlds(_name(q)),
     "/api/convergence": lambda q: do_convergence(_name(q)),
     "/api/portfolio": lambda q: do_portfolio(
-        _tristate(q, "repriced"), _tristate(q, "run") is not False
+        _tristate(q, "repriced"), _tristate(q, "run") is not False, _names(q)
     ),
     "/api/compare": lambda q: do_compare(_named(q, "a"), _named(q, "b")),
 }

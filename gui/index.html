@@ -59,6 +59,8 @@
      takes, because it is the same statement about the same row. */
   .age { font-size: 11px; color: var(--muted); flex: none; }
   .age.stale { color: var(--viz-neg); }
+  .item > .age { margin-left: auto; }
+  .item > .pick { flex: none; margin: 0; align-self: center; cursor: pointer; }
   .item.active .age { color: inherit; }
   .list-tools { display: flex; gap: 6px; margin: 6px 0 10px; }
   .list-tools button {
@@ -669,7 +671,9 @@ function renderList(analyses, query, selected, grouped) {
   const row = a => {
     const age = ageInfo(a.age_days);
     return `<div class="${cls(a.name)}" data-name="${esc(a.name)}">${esc(a.name)}${
-      age ? `<span class="age${age.stale ? " stale" : ""}">${age.text}</span>` : ""}</div>`;
+      age ? `<span class="age${age.stale ? " stale" : ""}">${age.text}</span>` : ""}<input
+      type="checkbox" class="pick" data-pick="${esc(a.name)}"${
+      pfPicked.has(a.name) ? " checked" : ""} title="Select for Run selected"></div>`;
   };
 
   // Grouping re-orders, it never filters: every hit appears in exactly one
@@ -742,6 +746,8 @@ async function boot() {
     // would stack a new listener on every render.
     if (e.target.closest("[data-group]")) { groupByTicker = !groupByTicker; drawList(); return; }
     if (e.target.closest("[data-portfolio]")) { showPortfolio(); return; }
+    const pick = e.target.closest("[data-pick]");
+    if (pick) { togglePick(pick.dataset.pick); return; }
     const el = e.target.closest(".item");
     if (el && el.dataset.name) select(el.dataset.name);
   });
@@ -950,14 +956,15 @@ function wireMain() {
   });
 }
 
-async function showPortfolio(run = false) {
+async function showPortfolio(run = false, names = null) {
   if (busy) return;
-  const pending = (portfolioRows || []).filter(r => r.status === "not run").length;
+  const pending = (portfolioRows || []).filter(r =>
+    r.status === "not run" && (!names || names.includes(r.name))).length;
   current = null; selected = PORTFOLIO; cache = {}; compareWith = "";
   drawList();
   $("#main").innerHTML = `<h2>All analyses</h2>
     <div class="tagline">${run
-      ? `Running ${pending} specs not run yet, about a second each.`
+      ? `Running ${pending} specs not run yet.`
       : "Loading cached results."}</div>`;
   try {
     // Nothing sent while the basis is unchosen; "0" sent explicitly once it is,
@@ -965,6 +972,7 @@ async function showPortfolio(run = false) {
     // silently undo a deliberate "As analysed".
     const d = await api("/api/portfolio", {
       run: run ? "1" : "0",
+      ...(names ? { names: names.join(",") } : {}),
       ...(repriced === null ? {} : { repriced: repriced ? "1" : "0" }),
     });
     portfolioRows = d.portfolio; portfolioMeta = d;
@@ -1019,9 +1027,11 @@ function paintPortfolioBody() {
   body.querySelectorAll("[data-pf-chip]").forEach(b =>
     b.addEventListener("click", () => pfDrop(b.dataset.pfChip)));
   body.querySelectorAll("[data-pf-clear]").forEach(b =>
-    b.addEventListener("click", () => { pfPicked.clear(); paintPortfolioBody(); }));
+    b.addEventListener("click", () => { pfPicked.clear(); drawList(); paintPortfolioBody(); }));
   body.querySelectorAll("[data-pf-run]").forEach(b =>
     b.addEventListener("click", () => showPortfolio(true)));
+  body.querySelectorAll("[data-pf-run-selected]").forEach(b =>
+    b.addEventListener("click", () => showPortfolio(true, [...pfPicked])));
   body.querySelectorAll("[data-anchor]").forEach(b =>
     b.addEventListener("click", () => { mosAnchor = b.dataset.anchor; paintPortfolioBody(); }));
   // Changing the price basis does need a round trip - a different price is a
@@ -1040,6 +1050,7 @@ function paintPortfolioBody() {
 function pfAdd(name) {
   if (!name) return;
   pfPicked.add(name);
+  drawList();
   pfQuery = "";
   const box = $("#pf-filter");
   if (box) box.value = "";
@@ -1049,7 +1060,14 @@ function pfAdd(name) {
 function pfDrop(name) {
   if (!name) return;
   pfPicked.delete(name);
+  drawList();
   paintPortfolioBody();
+}
+
+function togglePick(name) {
+  if (pfPicked.has(name)) pfPicked.delete(name); else pfPicked.add(name);
+  drawList();
+  if (selected === PORTFOLIO) paintPortfolioBody();
 }
 
 function paint() {
@@ -1536,8 +1554,11 @@ function renderPortfolio(rows) {
   // every row beneath it.
   let h = pfBar(rows.filter(r => pfPicked.has(r.name)).map(r => r.name));
   if (pendingAll) {
+    const pickedPending = rows.filter(r => r.status === "not run" && pfPicked.has(r.name)).length;
     h += `<div class="pf-sel"><span><b>${pendingAll} of ${rows.length}</b> not run
-      yet, about a second each; results stay cached until a spec changes.</span>
+      yet; results stay cached until a spec changes.</span>
+      <button data-pf-run-selected="1"${pickedPending ? "" : " disabled"}>Run selected (${
+        pickedPending})</button>
       <button data-pf-run="1">Run all (${pendingAll})</button></div>`;
   }
   h += `<div class="banner ok"><b>${count(ok.length, okAll)} analyses</b>
