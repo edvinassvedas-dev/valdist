@@ -490,72 +490,46 @@ const fmt = n => (typeof n === "number" && isFinite(n)) ? n.toFixed(2) : String(
 
 let current = null, tab = "report", cache = {}, busy = null, priceOverride = null;
 let allNames = [], compareWith = "";
-// What the sidebar marks as active. `current` cannot serve: it is null both
-// before anything is opened and while the portfolio view is showing, and the
-// sidebar has to tell those two apart. The portfolio entry is not an analysis,
-// so it travels through the same channel under a sentinel rather than through a
-// second flag - one source of truth for one highlight.
+// `current` is null both before anything is opened and while the portfolio is
+// showing, so it cannot double as the sidebar's selection marker.
 const PORTFOLIO = "@all";
 let selected = null;
-// Sidebar grouping, off by default: date order is the honest default for a list
-// of dated snapshots, and grouping answers a different question ("how has my view
-// of this company moved?") that only a multi-run ticker can even ask.
 let groupByTicker = false;
-// Assigned in boot(), once the analysis list exists. Held at module scope
-// because select() and showPortfolio() both have to redraw the list, and the
-// list is now a function of state (filter + selection) rather than markup
-// written once and patched in place afterwards.
 let drawList = () => {};
-// Which percentile the portfolio's margin-of-safety column is anchored on.
-// P10 by default: margin of safety is a question about the downside, and a name
-// can look healthy on the median while its P10 is severe (A54: P50 +72.6%,
-// P10 -47.6%). Ranking on the median hides exactly the case the framework is
-// meant to catch.
-// Shared with the price ladder, deliberately, rather than each view keeping its
-// own. The anchor is one question - "how do I want margin of safety read?" - not
-// a per-view setting, and the two views disagreeing is what this replaced: the
-// ladder showed P50 and only P50 while the portfolio argued for P10 in its own
-// copy. The ladder is per-analysis and the portfolio cross-analysis, so a reader
-// who sets P90 in one does meet it in the other; that is consistency, and the
-// control is visible and one click away in both.
-// `repriced` starts null, not false, and null is a third value rather than a
-// spelling of "off": it means "server, choose" - re-price if `prices.json` holds
-// any quotes, stay as-analysed if it does not. Only the server can answer that,
-// because the artefact is untracked and may simply not exist, and a hardcoded
-// true against no quotes flags every row "no quote" and re-prices none. The
-// response carries the basis it actually used, and the client adopts it, so the
-// toggle can never show a state the table is not in.
+// P10 by default: a name can look healthy on the median and still carry a severe
+// downside (A54: P50 +72.6%, P10 -47.6%). Shared with the price ladder.
+// `repriced` starts null, a third value meaning "server, choose": only the server
+// knows whether `prices.json` holds any quotes. The response carries the basis it
+// used and the client adopts it.
 let mosAnchor = "p10", portfolioRows = null, portfolioMeta = null, repriced = null;
 const LAB = { p10: "P10", p25: "P25", p50: "P50", p90: "P90" };
 const STALE_DAYS = 7;
 
-// The portfolio's filter. `pfQuery` is what is being typed into the box, which
-// only ever decides what the box SUGGESTS; `pfPicked` is the filter itself.
-// Keyed by name rather than by row index, because the table re-sorts whenever
-// the anchor changes and a positional pick would then point at a different
-// analysis. Module state, like `mosAnchor` and `repriced`, so a re-anchor (a
-// pure re-render) and a price-basis change (a re-fetch) both leave it alone.
+// `pfQuery` is what is being typed, which only decides what the box SUGGESTS;
+// `pfPicked` is the filter itself. Keyed by name, not row index: the table
+// re-sorts on every anchor change and a positional pick would drift.
 let pfQuery = "", pfPicked = new Set();
 
 //: How many names the box offers at once. A typeahead that lists all 83 is the
 //: list it exists to replace.
 const SUGGEST_MAX = 8;
 
-// Every whitespace-separated term must appear somewhere in the name, matched
-// case-insensitively. Written once and used by both the sidebar and the
-// portfolio filter: two copies of a matching rule drift, and the weakened one
-// goes unnoticed because the other stays green - `adapters/floors.py`'s
-// reasoning, applied to a string match.
+//: 8 rows is ~5.7s per repaint; the whole 68-analysis record is 48.2s.
+const PF_BATCH = 8;
+
+let pfRunning = null, pfError = null;
+// Supersedes an in-flight fill: another started, or the reader navigated away.
+let pfGen = 0;
+
+// Shared by the sidebar and the portfolio filter.
 const queryTerms = q => String(q ?? "").toLowerCase().split(/\s+/).filter(Boolean);
 const nameMatches = (name, q) => {
   const hay = String(name).toLowerCase();
   return queryTerms(q).every(t => hay.includes(t));
 };
 
-// Minimal Markdown -> HTML. Deliberately hand-rolled rather than pulling in a
-// library: this viewer stays dependency-free and build-step-free, and the
-// generated reports use a narrow, known subset. Input is escaped first, so no
-// rule below can inject markup even though the files are locally authored.
+// Hand-rolled, dependency-free. Input is escaped first, so no rule below can
+// inject markup.
 function md2html(src) {
   const inline = s => esc(s)
     .replace(/`([^`]+)`/g, "<code>$1</code>")
@@ -586,9 +560,8 @@ function md2html(src) {
       out.push(`<div class="scroll"><table><thead><tr>${
         head.map(h => `<th>${inline(h)}</th>`).join("")}</tr></thead><tbody>${
         body.map(r => `<tr>${r.map(c =>
-          // Right-align only cells that are entirely a number. Matching a
-          // leading digit instead would right-align (and monospace) prose that
-          // merely starts with one, e.g. "$74.90 (2026-07-24 close, Yahoo ...)".
+          // Entirely a number, not merely starting with one: a leading-digit match would
+          // right-align prose like "$74.90 (2026-07-24 close, Yahoo ...)".
           `<td${/^[-+±$(]?[\d.,]+\s*[%x×)]?$/.test(c.trim()) ? ' class="num"' : ""}>${
             inline(c)}</td>`).join("")}</tr>`
         ).join("")}</tbody></table></div>`);
@@ -621,10 +594,6 @@ async function api(path, params = {}) {
   return body;
 }
 
-// Opening index.html straight off disk is the obvious thing to try, and it
-// cannot work: the page is a client for the local server, so its fetches have
-// no origin to resolve against. Say so instead of rendering an empty list under
-// a "Select an analysis" prompt the reader cannot act on.
 function showNoServer(isFile) {
   $("#search").hidden = true;   // there is nothing behind it to filter
   $("#list").innerHTML = "";
@@ -642,23 +611,12 @@ function showNoServer(isFile) {
     </div>`;
 }
 
-// The sidebar, as a pure function of (analyses, query, selected) so it can be
-// exercised outside a browser - see tests/test_gui_render.py.
-//
-// The filter matches anywhere in the name and splits on whitespace, requiring
-// every term. Names are `<date>-<TICKER>`, so anchoring the match at the start
-// would make the ticker - the half a reader actually thinks in - unsearchable,
-// and treating the query as one literal string would make "vici 2026" match
-// nothing while naming an analysis that exists.
-//
-// The portfolio entry is never filtered out: it is the way back from a query
-// that matches nothing, and dropping it would leave a reader whose only
-// remaining control is the text they just typed.
-// How old an analysis is, and whether that counts as stale. One definition, used
-// by the sidebar and by the portfolio table: two copies would let the list call a
-// row fresh while the table it opens calls the same row stale, and the reader has
-// no way to know which is lying. Same reasoning as `adapters/floors.py`.
-// `null` for an undated entry - undated is not fresh, and 0 renders as "today".
+// Pure, so tests/test_gui_render.py can drive it. The filter matches anywhere in
+// the name because names are `<date>-<TICKER>` and the ticker is the half a reader
+// thinks in. The portfolio entry is never filtered out: it is the way back from a
+// query that matches nothing.
+// One definition, shared by the sidebar and the portfolio table, so the two can
+// never disagree about the same row. `null` for an undated entry.
 function ageInfo(days) {
   if (typeof days !== "number" || !isFinite(days)) return null;
   return { days, text: days === 0 ? "today" : `${days}d`, stale: days > STALE_DAYS };
@@ -676,11 +634,8 @@ function renderList(analyses, query, selected, grouped) {
       pfPicked.has(a.name) ? " checked" : ""} title="Select for Run selected"></div>`;
   };
 
-  // Grouping re-orders, it never filters: every hit appears in exactly one
-  // section. Only tickers with more than one run get a heading - a heading per
-  // ticker once most have one run is noise rather than grouping - and those
-  // are exactly the tickers the Timeline button is offered for, so the toggle
-  // surfaces the set that can actually be compared.
+  // Grouping re-orders, it never filters. Only multi-run tickers get a heading, the
+  // same set the Timeline button is offered for.
   const body = () => {
     if (!grouped) return hits.map(row).join("");
     const by = new Map();
@@ -705,14 +660,9 @@ function renderList(analyses, query, selected, grouped) {
 
   return [
     `<div class="${cls(PORTFOLIO)}" data-portfolio="1">All analyses</div>`,
-    // Inside the list rather than beside the search box, so the delegated
-    // listener already bound on #list handles it and no new registration is
-    // needed - see wireMain's note.
+    // Inside the list, so the delegated listener on #list already handles it.
     `<div class="list-tools"><button data-group="1" class="${
       grouped ? "on" : ""}">Group by ticker</button></div>`,
-    // "n of N" only while filtering, and only when there is something to show:
-    // a list shortened by the reader's own query should say so, and "0 of 32"
-    // above the sentence below would be saying it twice.
     terms.length && hits.length
       ? `<div class="list-hint">${hits.length} of ${analyses.length}</div>` : "",
     body(),
@@ -741,9 +691,8 @@ async function boot() {
     if (e.key === "Escape") { e.target.value = ""; drawList(); }
   });
   $("#list").addEventListener("click", e => {
-    // Handled by the listener already bound here rather than by a new one on the
-    // button, which renderList rebuilds on every keystroke - binding per draw
-    // would stack a new listener on every render.
+    // Handled here rather than on the button, which renderList rebuilds on every
+    // keystroke - binding per draw would stack a listener per render.
     if (e.target.closest("[data-group]")) { groupByTicker = !groupByTicker; drawList(); return; }
     if (e.target.closest("[data-portfolio]")) { showPortfolio(); return; }
     const pick = e.target.closest("[data-pick]");
@@ -752,8 +701,6 @@ async function boot() {
     if (el && el.dataset.name) select(el.dataset.name);
   });
   wireMain();
-  // Deep-link support: /#2026-07-25-A12 opens that analysis directly, so a view
-  // can be shared or bookmarked. Guarded against a stale/unknown hash.
   const wanted = decodeURIComponent(location.hash.slice(1));
   if (wanted && analyses.some(a => a.name === wanted)) select(wanted);
   window.addEventListener("hashchange", () => {
@@ -762,13 +709,9 @@ async function boot() {
   });
 }
 
-// `2026-07-25-A12` -> `A12`. This is a second implementation of the server's
-// `_ticker_of`, and calling it anything softer would be the comment-instead-of-a-
-// check move: it decides whether the Timeline button is offered, so a pattern
-// that drifts narrower hides the feature entirely while every render test stays
-// green. `tests/test_gui_render.py` pins the two against each other over every
-// real analysis name and the hostile ones this code path refuses. The server still
-// decides what the timeline contains; this only decides whether to ask.
+// A second implementation of the server's `_ticker_of`: it decides whether the
+// Timeline button is offered, so a pattern that drifts narrower hides the feature
+// while every render test stays green. tests/test_gui_render.py pins the two.
 const tickerOf = n => (String(n ?? "").match(/^\d{4}-\d{2}-\d{2}-([A-Za-z0-9.-]{1,12})$/) || [])[1];
 
 // Every analysis of the same company, this one included.
@@ -777,27 +720,13 @@ function siblingRuns(name) {
   return t ? allNames.filter(n => tickerOf(n) === t) : [];
 }
 
-// The price an untouched page opens with: the current quote if there is one,
-// else the spec's own. A fallback chain rather than a value, and both ways it
-// can be wrong are silent - `prices/prices.json` is untracked and absent until
-// somebody runs the fetcher, so reading `current_price` unconditionally renders
-// an empty field that neither throws nor runs.
-//
-// Why the quote leads: the spec price is the number the analyst typed on the
-// analysis date, and this repo's set spans days to weeks. Opening at it means
-// the first figure on screen answers "was this cheap when I wrote it?" when the
-// question being asked is "is it cheap now?".
+// The quote if there is one, else the spec's own. The quote leads because the spec
+// price is what the analyst typed on the analysis date and this set spans days to
+// weeks - the question being asked is "is it cheap now?".
 function defaultPrice(a) {
   return a?.current_price ?? a?.spec_price ?? "";
 }
 
-// Pure, and separated from render() for that reason: the default is a chain
-// with two silent failure modes, so it is worth a test that can see the markup.
-//
-// The spec price keeps its own button. That is what makes opening away from it
-// defensible rather than merely convenient - the published number is one click
-// away, and it is labelled with its value so the reader can see what they are
-// leaving without pressing anything.
 function priceBox(a, override, busy) {
   const off = busy ? " disabled" : "";
   const quote = a?.current_price;
@@ -820,8 +749,7 @@ function priceBox(a, override, busy) {
 
 async function select(name) {
   if (busy) return;   // a run is in flight against the current spec; let it finish
-  // priceOverride is cleared with the rest: a price typed for one company must
-  // never silently carry over to the next one.
+  // A price typed for one company must never carry over to the next.
   current = name; selected = name;
   cache = {}; tab = "report"; priceOverride = null; compareWith = "";
   if (decodeURIComponent(location.hash.slice(1)) !== name) location.hash = encodeURIComponent(name);
@@ -842,10 +770,8 @@ function render() {
       ${[["validate", "Validate"], ["run", "Run Monte Carlo"],
          ["ladder", "Price ladder"], ["worlds", "Worlds"],
          ["convergence", "Convergence"],
-         // Offered only where it can answer something. A timeline of one run
-         // is valid and the endpoint serves it, but putting the button on the
-         // 40 tickers analysed once would advertise a comparison that does not
-         // exist for them.
+         // Offered only where it can answer something: a timeline of one run is valid but
+         // advertises a comparison that does not exist.
          ...(siblingRuns(current).length > 1 ? [["timeline", "Timeline"]] : [])].map(
         ([k, label]) => `<button data-act="${k}"${busy ? " disabled" : ""}>${
           busy === k ? "Running…" : label}</button>`).join("")}
@@ -881,11 +807,8 @@ function wireMain() {
     if (t) {
       tab = t.dataset.tab;
       render();
-      // The only tab that costs a request. Fetched on first open rather than
-      // alongside /api/analysis so that selecting an analysis stays one round
-      // trip, and cached for the rest of that analysis - Λ is a property of the
-      // spec file and cannot change while it is open. `cache` is cleared by
-      // select(), so it can never outlive its subject.
+      // The only tab that costs a request, so it is fetched on first open and cached for
+      // the rest of this analysis. `cache` is cleared by select().
       if (tab === "model" && !cache.model && !cache.modelError && current) {
         const want = current;
         try { const d = await api("/api/model", { name: current }); if (want === current) cache.model = d; }
@@ -894,9 +817,7 @@ function wireMain() {
       }
       return;
     }
-    // Re-anchoring the ladder's margin column. Handled here, on the delegated
-    // listener bound once, rather than re-registered after each ladder render -
-    // that is what stacked listeners and ran one click twice (see above).
+    // On the delegated listener, not re-registered after each ladder render.
     const m = e.target.closest("button[data-mos]");
     if (m && cache.ladder) {
       mosAnchor = m.dataset.mos;
@@ -906,8 +827,6 @@ function wireMain() {
     }
     const b = e.target.closest("button[data-act]");
     if (!b) return;
-    // Reset returns to the default, which is the quote when there is one - so
-    // the route back to the published price is its own button rather than this.
     if (b.dataset.act === "reset-price") { priceOverride = null; render(); return; }
     if (b.dataset.act === "use-spec") {
       priceOverride = String(cache.analysis?.spec_price ?? "");
@@ -916,14 +835,12 @@ function wireMain() {
     }
     await act(b.dataset.act);
   });
-  // Kept in module state, never read out of the DOM at submit time, because
-  // render() rebuilds the input. Deliberately doesn't re-render on each
-  // keystroke - that would destroy focus mid-typing.
+  // Module state, never read out of the DOM at submit time: render() rebuilds the
+  // input, and re-rendering per keystroke would destroy focus.
   $("#main").addEventListener("input", e => {
     if (e.target.id === "price") priceOverride = e.target.value;
-    // The portfolio filter, handled on this delegated listener rather than
-    // re-registered by each paint - and repainting only the body below the
-    // input is what lets the caret survive the keystroke that triggered it.
+    // Repainting only the body below the input is what lets the caret survive the
+    // keystroke that triggered it.
     if (e.target.id === "pf-filter") { pfQuery = e.target.value; paintPortfolioBody(); }
   });
   // Enter in the price field runs, which is what typing a price implies.
@@ -932,61 +849,93 @@ function wireMain() {
     if (e.target.id === "pf-filter") {
       // Escape clears the box, exactly as it does in the sidebar's search box.
       if (e.key === "Escape") { e.target.value = ""; pfQuery = ""; paintPortfolioBody(); }
-      // Enter commits the first suggestion, so a name can be added without
-      // reaching for the mouse. Prevented from submitting anything: this input
-      // is not in a form, and Enter in a search field otherwise reloads in some
-      // browsers, which would drop every chip.
+      // preventDefault: this input is not in a form, and Enter in a search field reloads
+      // in some browsers, which would drop every chip.
       if (e.key === "Enter") {
         e.preventDefault();
         const first = pfSuggest(portfolioRows || [])[0];
         if (first) pfAdd(first);
       }
-      // Backspace on an empty box removes the last chip - the standard gesture
-      // for this control, and the only one that does not require aiming at a
-      // small target.
       if (e.key === "Backspace" && !e.target.value && pfPicked.size) {
         pfDrop([...pfPicked][pfPicked.size - 1]);
       }
     }
   });
   $("#main").addEventListener("change", e => {
-    // Re-render on change (not input): a <select> fires once on commit, so
-    // unlike the price field there is no focus to lose.
+    // change, not input: a <select> fires once on commit, so no focus is lost.
     if (e.target.id === "cmp") { compareWith = e.target.value; render(); }
   });
 }
 
+function pfBatches(names, size) {
+  const step = Math.max(1, Math.floor(size) || 0);   // a step of 0 never terminates
+  const out = [];
+  for (let i = 0; i < names.length; i += step) out.push(names.slice(i, i + step));
+  return out;
+}
+
+// Opens from cache (~0.2s) whatever was asked for, then fills underneath.
 async function showPortfolio(run = false, names = null) {
   if (busy) return;
-  const pending = (portfolioRows || []).filter(r =>
-    r.status === "not run" && (!names || names.includes(r.name))).length;
+  const gen = ++pfGen;
   current = null; selected = PORTFOLIO; cache = {}; compareWith = "";
+  pfRunning = null; pfError = null;
   drawList();
   $("#main").innerHTML = `<h2>All analyses</h2>
-    <div class="tagline">${run
-      ? `Running ${pending} specs not run yet.`
-      : "Loading cached results."}</div>`;
+    <div class="tagline">Loading cached results.</div>`;
+  // "0" sent explicitly once the basis is chosen: an omitted parameter asks for the
+  // default and would silently undo a deliberate "As analysed".
+  const basis = repriced === null ? {} : { repriced: repriced ? "1" : "0" };
   try {
-    // Nothing sent while the basis is unchosen; "0" sent explicitly once it is,
-    // because an omitted parameter is what asks for the default and would
-    // silently undo a deliberate "As analysed".
-    const d = await api("/api/portfolio", {
-      run: run ? "1" : "0",
-      ...(names ? { names: names.join(",") } : {}),
-      ...(repriced === null ? {} : { repriced: repriced ? "1" : "0" }),
-    });
+    const d = await api("/api/portfolio", { run: "0", ...basis });
+    if (gen !== pfGen) return;
     portfolioRows = d.portfolio; portfolioMeta = d;
     repriced = d.repriced;
     paintPortfolio();
   } catch (err) {
+    if (gen !== pfGen) return;
     $("#main").innerHTML = `<h2>All analyses</h2>
       <div class="banner err"><b>Failed</b>${esc(err.message)}</div>`;
+    return;
+  }
+  if (run) await fillPortfolio(gen, basis, names);
+}
+
+// Every response is the whole table, so a batch replaces the row set wholesale.
+// Pinned by `test_successive_named_runs_accumulate`.
+async function fillPortfolio(gen, basis, names) {
+  const pending = (portfolioRows || [])
+    .filter(r => r.status === "not run" && (!names || names.includes(r.name)))
+    .map(r => r.name);
+  if (!pending.length) return;
+
+  pfRunning = { done: 0, total: pending.length };
+  paintPortfolioBody();
+  try {
+    for (const batch of pfBatches(pending, PF_BATCH)) {
+      let d;
+      try {
+        d = await api("/api/portfolio", { run: "1", names: batch.join(","), ...basis });
+      } catch (err) {
+        if (gen === pfGen) pfError = err.message;   // rows already painted stay
+        return;
+      }
+      if (gen !== pfGen || selected !== PORTFOLIO) return;
+      portfolioRows = d.portfolio; portfolioMeta = d;
+      repriced = d.repriced;
+      pfRunning = { done: pfRunning.done + batch.length, total: pending.length };
+      paintPortfolioBody();
+    }
+  } finally {
+    if (gen === pfGen) {   // a superseding fill owns the state now
+      pfRunning = null;
+      if (selected === PORTFOLIO) paintPortfolioBody();
+    }
   }
 }
 
-// The shell, written once per visit. The filter input lives here rather than in
-// the body below it because rewriting an input while it has focus destroys the
-// caret mid-word - the same problem the price field documents in wireMain().
+// The filter input lives in the shell, not the body: rewriting an input while it
+// has focus destroys the caret mid-word.
 function paintPortfolio() {
   if (!portfolioRows) return;
   $("#main").innerHTML = `<h2>All analyses</h2>
@@ -995,24 +944,16 @@ function paintPortfolio() {
       placeholder="Type a ticker or date, then click a name to add it">
       <div id="pf-suggest"></div></div></div>
     <div id="pf-body"></div>`;
-  // Assigned, not interpolated. `esc()` escapes &, < and > and deliberately not
-  // quotes - every other caller feeds it engine- or filesystem-derived text,
-  // but this is what the reader typed, so a single `"` would close the attribute
-  // and the rest would be parsed as markup. A property assignment has no
-  // parsing step to break out of.
+  // Assigned, not interpolated. `esc()` deliberately does not escape quotes, and
+  // this is what the reader typed - a single `"` would close the attribute. A
+  // property assignment has no parsing step to break out of.
   $("#pf-filter").value = pfQuery;
   paintPortfolioBody();
 }
 
-// Re-anchoring is a pure re-render: every margin came back with the original
-// run, so switching P10/P50/P90 costs nothing and never re-runs the model.
-// Filtering and picking are the same kind of thing, which is why all three land
-// here rather than going back to the server.
-//
-// Every listener below is bound on a child of the innerHTML this function has
-// just written, so the previous ones are garbage along with the nodes they sat
-// on. That is `paintPortfolio`'s original pattern, and the reason anchor 20
-// classifies by receiver rather than by caller.
+// Re-anchoring, filtering and picking are all pure re-renders off the original
+// run. Every listener below is bound on a child of the innerHTML just written,
+// which is why anchor 20 classifies by receiver rather than by caller.
 function paintPortfolioBody() {
   const body = $("#pf-body"); if (!body) return;
   const drop = $("#pf-suggest");
@@ -1034,8 +975,7 @@ function paintPortfolioBody() {
     b.addEventListener("click", () => showPortfolio(true, [...pfPicked])));
   body.querySelectorAll("[data-anchor]").forEach(b =>
     b.addEventListener("click", () => { mosAnchor = b.dataset.anchor; paintPortfolioBody(); }));
-  // Changing the price basis does need a round trip - a different price is a
-  // different run - unlike re-anchoring, which is pure presentation.
+  // A different price is a different run, unlike re-anchoring.
   body.querySelectorAll("[data-basis]").forEach(b =>
     b.addEventListener("click", () => {
       const want = b.dataset.basis === "current";
@@ -1043,10 +983,8 @@ function paintPortfolioBody() {
     }));
 }
 
-// Adding always clears the query with it. The name is now a chip, so leaving the
-// text that found it in the box would leave the box suggesting a name it has
-// already been given - and the reader would have to empty it by hand before
-// searching for the second one.
+// Clearing the query too: the name is a chip now, and the box would otherwise go
+// on suggesting it.
 function pfAdd(name) {
   if (!name) return;
   pfPicked.add(name);
@@ -1080,10 +1018,8 @@ function paint() {
     el.innerHTML = a?.yaml ? `<pre>${esc(a.yaml)}</pre>`
                            : `<p class="tagline">No .yaml file.</p>`;
   } else if (tab === "model") {
-    // Fetched lazily by the tab handler, so opening an analysis stays one
-    // request. Three states, kept distinct: a failure must not render as an
-    // empty panel, which is how a spec the validator refused would otherwise
-    // look - and refusing is the point of routing this through hydrate().
+    // Three states kept distinct: a failure must not render as an empty panel, which
+    // is how a spec the validator refused would otherwise look.
     el.innerHTML = cache.modelError
       ? `<div class="banner err"><b>Failed</b>${esc(cache.modelError)}</div>`
       : cache.model ? renderMarginals(cache.model) + renderFactors(cache.model)
@@ -1094,10 +1030,8 @@ function paint() {
 }
 
 async function act(kind) {
-  // Setting btn.disabled would not survive the render() below, which rebuilds
-  // the button enabled. `busy` is module state, so it does - and render() reads
-  // it to disable every action while one is in flight. Without it an impatient
-  // double-click still queues two runs of the same expensive job.
+  // `busy` is module state because btn.disabled would not survive the render()
+  // below. Without it a double-click queues two 50,000-draw runs.
   if (busy) return;
   busy = kind;
   tab = "results";
@@ -1105,11 +1039,9 @@ async function act(kind) {
     kind === "ladder" ? " One model run per rung, so this takes a few seconds." :
     kind === "convergence" ? " Re-running at double the draws, so this takes a moment." : ""}</p>`;
   render();
-  // Only send a price when it actually differs from the spec's, so a run at the
-  // published price is never marked a what-if. What gets sent is the effective
-  // price, not the typed one: an untouched field now means the current quote,
-  // and reading the override alone would show the quote in the box and run the
-  // spec's price behind it - the two disagreeing with no way to tell.
+  // The effective price, not the typed one: an untouched field means the current
+  // quote, and reading the override alone would show the quote in the box while
+  // running the spec's price behind it.
   const spec = cache.analysis?.spec_price;
   const typed = (priceOverride ?? "").toString().trim();
   const p = typed || String(defaultPrice(cache.analysis) ?? "");
@@ -1122,9 +1054,7 @@ async function act(kind) {
     } else if (kind === "run") {
       cache.results = renderRun(await api("/api/run", params));
     } else if (kind === "ladder") {
-      // The payload is kept, not just its rendering: re-anchoring the margin
-      // column is a pure re-render off this same data, and `cache` is cleared
-      // when another analysis is selected, so it cannot outlive its subject.
+      // The payload is kept: re-anchoring the margin column re-renders off it.
       cache.ladder = await api("/api/ladder", params);
       cache.results = renderLadder(cache.ladder);
     } else if (kind === "timeline") {
@@ -1160,14 +1090,9 @@ function renderValidate(v) {
   return h;
 }
 
-// A result computed against a price the analyst did not publish is not that
-// analysis's number. Say so before any figure, every time.
-//
-// Two distinct cases, deliberately worded differently. An arbitrary typed price
-// is a hypothetical. The current market quote is not arbitrary - but it carries
-// its own trap, because re-pricing refreshes only the price while the value view
-// still dates from the analysis. Collapsing both into one message would hide the
-// half that actually misleads.
+// Two cases, worded differently on purpose. An arbitrary typed price is a
+// hypothetical; the market quote is not, but re-pricing refreshes only the price
+// while the value view still dates from the analysis.
 function whatIfBanner(r) {
   if (!r.overridden) return "";
   const a = cache.analysis;
@@ -1200,11 +1125,8 @@ function whatIfBanner(r) {
       : ""}</div>`;
 }
 
-// The value distribution with the price marked. This is the question the whole
-// engine exists to answer - "where does the price sit inside the range of
-// value?" - and a six-row key/value table was the least informative way to put
-// it. The domain always includes the price, so a price outside the P10-P90 band
-// stays on screen rather than pinning silently to an edge.
+// The domain always includes the price, so a price outside the P10-P90 band stays
+// on screen rather than pinning silently to an edge.
 function rangeStrip(p) {
   const lo = p.value_p10, mid = p.value_p50, hi = p.value_p90, price = p.price;
   const anchor = p.value_p25;   // conservative value anchor; may be absent on an old payload
@@ -1237,10 +1159,7 @@ function rangeStrip(p) {
   </div>`;
 }
 
-// The shape of the 50,000 draws, which three quantiles cannot convey: skew,
-// tail thickness, and how much mass actually sits above the price. Bars are
-// split at the price, so the blue area IS p_undervalued - the hero number made
-// visible instead of merely asserted.
+// Bars are split at the price, so the blue area IS p_undervalued.
 function histogram(hh, p) {
   if (!hh || !hh.counts || !hh.counts.length) return "";
   const { counts, edges, lo, hi, below, above, n, price } = hh;
@@ -1248,9 +1167,8 @@ function histogram(hh, p) {
   const at = v => ((v - lo) / (hi - lo)) * 100;
   const inside = v => typeof v === "number" && isFinite(v) && v >= lo && v <= hi;
   const hasPrice = inside(price);
-  // Percentile references. Values are deliberately not repeated in the labels:
-  // the range strip immediately above carries them, and "P50 72.20" would sit
-  // three percent of the axis away from "price 74.90" and overprint it.
+  // Values deliberately not repeated in the labels: the range strip above carries
+  // them, and "P50 72.20" would overprint "price 74.90".
   const qs = p ? [["P10", p.value_p10], ["P25", p.value_p25], ["P50", p.value_p50], ["P90", p.value_p90]]
                   .filter(([, v]) => inside(v)) : [];
 
@@ -1283,12 +1201,9 @@ function histogram(hh, p) {
   </div>`;
 }
 
-// Diverging bars centred on zero. Sign is encoded three ways - which side of
-// the zero rule, hue, and the signed label - so it never rests on colour alone.
-// `note` is optional per-row markup rendered in a fourth column - built by the
-// caller, so it is inserted raw and every value inside it must already be
-// escaped. Used by the tornado to put each bar's swing beside it; the margin-of
-// -safety chart passes none and keeps its three columns.
+// Sign is encoded three ways - side of the zero rule, hue, signed label - so it
+// never rests on colour alone. `note` is optional per-row markup built by the
+// caller and inserted raw, so every value inside it must already be escaped.
 function divBars(title, sub, rows, domain) {
   const d = domain || Math.max(...rows.map(r => Math.abs(r.value)), 1e-9);
   const noted = rows.some(r => r.note);
@@ -1309,24 +1224,17 @@ function divBars(title, sub, rows, domain) {
   </div>`;
 }
 
-// What each tornado bar is worth, beside the bar. The bar is a Spearman rank
-// correlation and rank correlation is scale-free: it says how monotonically
-// value tracks a driver, never by how much. On the golden spec `div_growth` is
-// the fourth bar at +0.450 and moves the value 0.376 - least of the six - while
-// `affo_terminal` is drawn shorter at +0.317 and moves it 1.146. The bar is not
-// wrong (it reports association in a dependent sample, which is what the
-// factor model is responsible for), but nobody reads a tornado as association.
-//
-// The bar keeps its own length and order. Rescaling it by band width would be
-// the constants-elasticity instrument this project rejected, which ranked the
-// A07 spec's `nav_other` most benign precisely because a uniform relative bump
-// assumes uncertainty is proportional to magnitude.
+// The bar is a Spearman rank correlation and is scale-free: it says how
+// monotonically value tracks a driver, never by how much. On the golden spec
+// `div_growth` is the fourth bar at +0.450 and moves value 0.376, least of the
+// six, while `affo_terminal` is drawn shorter at +0.317 and moves it 1.146.
+// The bar keeps its own length and order; rescaling by band width would assume
+// uncertainty is proportional to magnitude.
 function swingNote(s, worst) {
   if (!s) return "<div></div>";
   const w = worst > 0 ? Math.min(Math.abs(s.swing) / worst, 1) * 100 : 0;
-  // The band shown is the stated one - what the analyst typed - while the swing
-  // is measured across what the model draws. Three of five families differ, so a
-  // row where they do is marked rather than left to be read as one number.
+  // The band is the stated one, the swing is measured across what the model draws.
+  // Three of five families differ, so a row where they do is marked.
   const drifted = s.drift_flagged;
   return `<div class="sw">
     <div class="sw-track"><i class="sw-bar" style="width:${w.toFixed(1)}%"></i></div>
@@ -1344,10 +1252,8 @@ function swingNote(s, worst) {
 function renderRun(r) {
   const p = r.payload;
   const warns = p.warnings || [];
-  // The payload's schema version used to be rendered in a footer and compared
-  // against nothing. An unrecognised contract means fields this page reads may
-  // have been renamed or dropped, and every one of them would render as a blank
-  // - so say so at the top rather than presenting a half-empty page as a result.
+  // An unrecognised contract means fields this page reads may have been renamed or
+  // dropped, and every one would render blank. Say so at the top.
   const sch = r.schema;
   let h = (sch && sch.supported === false
     ? `<div class="banner err"><b>Unrecognised report schema</b>This viewer reads
@@ -1361,9 +1267,8 @@ function renderRun(r) {
         warns.map(w => esc(w)).join("<br>")}</div>`
     : `<div class="banner ok"><b>Clean run</b>No floored draws, no degenerate p_undervalued.</div>`);
 
-  // Hero: exactly one per view. The MC standard error rides with it at 4 dp,
-  // because a stderr shown as "0.00" reads as "no uncertainty" - an artefact
-  // to flag, not something to round away.
+  // The MC stderr rides with the hero number at 4 dp: shown as "0.00" it reads as
+  // "no uncertainty", which is an artefact to flag rather than round away.
   const pu = p.p_undervalued, se = p.p_undervalued_stderr;
   if (typeof pu === "number" && isFinite(pu)) {
     h += `<div class="hero">
@@ -1377,8 +1282,6 @@ function renderRun(r) {
   h += rangeStrip(p);
   h += histogram(r.histogram, p);
 
-  // Margin of safety is polarity around zero, so it gets the diverging form
-  // rather than three more numbers in a column.
   const mos = [["P10", p.mos_p10], ["P25", p.mos_p25], ["P50", p.mos_p50], ["P90", p.mos_p90]]
     .filter(([, v]) => typeof v === "number" && isFinite(v))
     .map(([k, v]) => ({ name: k, value: v, label: `${v >= 0 ? "+" : ""}${(v * 100).toFixed(1)}%` }));
@@ -1389,9 +1292,6 @@ function renderRun(r) {
 
   const t = p.tornado || [];
   if (t.length) {
-    // Was an absolute-width bar, which threw the sign away: every driver grew
-    // rightwards and only the number said which way it pushed. A tornado is a
-    // diverging form - that is the whole point of the name.
     const sens = r.sensitivity || {};
     const worst = Math.max(...Object.values(sens).map(s => Math.abs(s.swing)), 0);
     h += divBars(
@@ -1425,10 +1325,8 @@ function renderLadder(d) {
         ${fmt(d.spec_price)}. Every rung uses the same seed and the same value
         distribution, so these are exact comparisons, not Monte Carlo noise.</div>`;
 
-  // Same control, same wording and the same free re-anchor as the portfolio -
-  // see `mosAnchor`. `data-mos` rather than the portfolio's `data-anchor`
-  // deliberately: the two live in the same #main, and one delegated handler
-  // matching both would fire this view's repaint from the portfolio's buttons.
+  // `data-mos` rather than the portfolio's `data-anchor`: the two live in the same
+  // #main, and one handler matching both would cross-fire.
   h += `<div class="mos-pick">
       <span>Margin of safety at</span>
       ${["p10", "p25", "p50", "p90"].map(k =>
@@ -1479,25 +1377,18 @@ function renderConvergence(d) {
     }).join("")}</tbody></table>`;
 }
 
-// The chips are the filter, and the only filter. No chips means the whole
-// record; one or more means exactly those. That is what makes the box a
-// multi-select rather than a search: a comparison is built by naming the
-// analyses in it, not by narrowing to a pattern that happens to catch them and
-// nothing else - which, with two runs of one ticker, it usually cannot.
+// The chips are the filter, and the only filter. No chips means the whole record;
+// one or more means exactly those.
 function pfShown(rows) {
   return pfPicked.size ? rows.filter(r => pfPicked.has(r.name)) : rows;
 }
 
-// The names the box is offering, in the order it offers them. Data rather than
-// markup, because Enter commits the first one and the wiring has to know what
-// that is without reading it back out of the DOM.
+// Data rather than markup: Enter commits the first one.
 function pfSuggest(rows) {
   if (!queryTerms(pfQuery).length) return [];
   return rows.map(r => r.name).filter(n => !pfPicked.has(n) && nameMatches(n, pfQuery));
 }
 
-// What the box is offering right now. Empty while nothing is typed: a dropdown
-// standing open over the table is a dropdown in the way.
 function renderSuggest(rows) {
   if (!queryTerms(pfQuery).length) return "";
   const hits = pfSuggest(rows);
@@ -1506,8 +1397,7 @@ function renderSuggest(rows) {
       <b>${esc(pfQuery)}</b></div></div>`;
   }
   const shown = hits.slice(0, SUGGEST_MAX);
-  // The remainder is counted rather than dropped. A list silently cut at 8 tells
-  // a reader who typed a broad term that eight is all there is.
+  // Counted rather than dropped: a list silently cut at 8 reads as all there is.
   return `<div class="pf-suggest">${shown.map(n =>
       `<div class="pf-suggest-item" data-pf-add="${esc(n)}">${esc(n)}</div>`).join("")}${
     hits.length > shown.length
@@ -1540,20 +1430,24 @@ function renderPortfolio(rows) {
   // `n of N` is what a filter earns, and only then: an undisclosed subset read
   // as the whole record is the README test-count failure in a rendered view.
   const count = (n, all) => cut ? `${n} of ${all}` : `${n}`;
-  // The ranking follows the anchor, because the anchor is the question being
-  // asked. Ranking on P(undervalued) while displaying a P10 margin would put
-  // the two most important columns in disagreement on the same row.
+  // The ranking follows the anchor: ranking on P(undervalued) while displaying a P10
+  // margin would put the two most important columns in disagreement.
   const ok = shown.filter(r => r.status === "ok")
                  .sort((a, b) => (b[key] ?? -Infinity) - (a[key] ?? -Infinity));
   const bad = shown.filter(r => r.status !== "ok" && r.status !== "not run");
 
-  // The basis sentence is conditional, and it did not used to be: it claimed
-  // "these are the shipped numbers, not re-priced ones" whether or not the table
-  // was re-priced. That was already wrong under the toggle; with the current
-  // quote as the default it would be the first line on the page, contradicting
-  // every row beneath it.
   let h = pfBar(rows.filter(r => pfPicked.has(r.name)).map(r => r.name));
-  if (pendingAll) {
+  if (pfError) {
+    h += `<div class="banner err"><b>Fill stopped</b>${esc(pfError)}<br>The rows
+      below are the ones that did run. Run again to finish; cached results are
+      not recomputed.</div>`;
+  }
+  // Withheld, not disabled: a disabled button says busy, not how far it has got.
+  if (pfRunning) {
+    h += `<div class="pf-sel"><span><b>Running ${pfRunning.done} of ${
+      pfRunning.total}</b> - rows appear as each batch lands, and the ranking
+      below covers what has run so far.</span></div>`;
+  } else if (pendingAll) {
     const pickedPending = rows.filter(r => r.status === "not run" && pfPicked.has(r.name)).length;
     h += `<div class="pf-sel"><span><b>${pendingAll} of ${rows.length}</b> not run
       yet; results stay cached until a spec changes.</span>
@@ -1586,9 +1480,8 @@ function renderPortfolio(rows) {
       <span class="tag">no re-run needed - all four come back with the same run</span>
     </div>`;
 
-  // Price basis. Re-pricing changes only the price; the value view still dates
-  // from the analysis, so this is offered beside the age column rather than on
-  // its own - the two have to be read together.
+  // Offered beside the age column: re-pricing changes only the price, and the two
+  // have to be read together.
   const cur = portfolioMeta?.current;
   h += `<div class="mos-pick">
       <span>Price basis</span>
@@ -1625,17 +1518,12 @@ function renderPortfolio(rows) {
     </tr></thead><tbody>${ok.map(r => {
       const m = r[key];
       const age = ageInfo(r.age_days);
-      // These are not results, and the ranking is where that has to be
-      // legible: this column used to read "1 warning(s)", which says a row
-      // has something to declare and not what, and the two kinds are different
-      // in kind - a floored tail is a meaningless piece of the distribution, a
-      // degenerate p_undervalued is the whole number being an artefact.
+      // The two kinds differ in kind: a floored tail is a meaningless piece of the
+      // distribution, a degenerate p_undervalued is the whole number as artefact.
       const flags = [];
-      // Named, counted, and rated with the engine's own text. 12 of the 13
-      // shipped specs that floor draws fire on fewer than 5 of 50,000, where a
-      // percentage formatted here would read "0.00%" - the disclosure saying the
-      // opposite of what it means. The flag name is shown because it is the only
-      // thing that says which leg floored.
+      // Rated with the engine's own text: 12 of the 13 shipped specs that floor draws
+      // fire on fewer than 5 of 50,000, where a percentage formatted here would read
+      // "0.00%" - the disclosure saying the opposite of what it means.
       (r.diagnostics || []).forEach(d => flags.push(
         `<span class="badge warn" title="${esc(d.name)}: fired on ${d.count} of the
           run's draws (${esc(d.rate_text)}). Those draws were floored, not computed,
@@ -1646,9 +1534,8 @@ function renderPortfolio(rows) {
           so the reported standard error of 0.0000 is an artefact, not confidence.
           Treat it as a too-narrow-inputs warning, not a result.">p = ${
           fmt(r.p_undervalued)} exactly - artefact, not a result</span>`);
-      // The partition, so a warning this column does not know how to draw is
-      // still counted rather than silently dropped. `warnings` is the engine's
-      // own total; anything above what is drawn above says so.
+      // The partition: a warning this column cannot draw is still counted rather than
+      // silently dropped.
       const declared = (r.diagnostics || []).length + (r.degenerate ? 1 : 0);
       if (r.warnings > declared) flags.push(
         `<span class="badge warn">${r.warnings - declared} more warning(s)</span>`);
@@ -1701,10 +1588,8 @@ function renderCompare(d) {
       pct ? (dd * 100).toFixed(1) + "%" : dd.toFixed(dp)}</td>`;
   };
 
-  // The comparison goes in the left column and the analysis you are viewing in
-  // the right, so the delta reads left-to-right as "what changed to arrive
-  // here". The other order computes comparison-minus-current, which renders a
-  // price that fell as "+4.27" - technically consistent, and backwards to read.
+  // Comparison left, current right, so the delta reads "what changed to arrive
+  // here". The other order renders a price that fell as "+4.27".
   let h = `<div class="banner ok"><b>${esc(b.name)} &rarr; ${esc(a.name)}</b>
     Each side run at its own spec price and seed. Delta is
     ${esc(a.name)} minus ${esc(b.name)}, i.e. what changed to arrive at the
@@ -1763,22 +1648,12 @@ function renderCompare(d) {
   return h;
 }
 
-// Every run of one company, stacked chronologically. `Compare` for N.
-//
-// Two things here are load-bearing and both fail silently if got wrong.
-//
-// One shared axis. Value does not depend on price, so every run's band is
-// directly comparable with every other run's whatever each was priced at - that
-// is what licenses a common domain. Scaling each strip to its own extent would
-// draw two different views identically, producing a picture that shows no drift
-// no matter how far the view moved.
-//
-// Two P(undervalued) columns. A saved figure moves because the price moved and
-// because the view moved, and showing only the saved one reports the sum while
-// looking like it reports the second. On the three A12 runs that is 22.1 points
-// saved against 10.3 at a common price - a 2.15x overstatement. Both are shown and
-// the split is stated in words, rather than offered as a toggle whose state the
-// reader has to remember.
+// One shared axis: value does not depend on price, so every run's band is directly
+// comparable whatever each was priced at. Scaling each strip to its own extent
+// would draw two different views identically.
+// Two P(undervalued) columns: a saved figure moves because the price moved and
+// because the view moved. On the three A12 runs that is 22.1 points saved against
+// 10.3 at a common price, a 2.15x overstatement.
 function renderTimeline(d) {
   const ok = d.runs.filter(r => r.status === "ok");
   const px = v => (typeof v === "number" && isFinite(v)) ? v : null;
@@ -1844,9 +1719,8 @@ function renderTimeline(d) {
   h += `<div class="tl-axis"><span>${fmt(d0)}</span><span>value per share</span>
     <span>${fmt(d1)}</span></div>`;
 
-  // The decomposition, in words. A reader who has to subtract two columns to
-  // discover that three quarters of the move was price will not do it, and the
-  // saved column is the one that looks authoritative.
+  // In words: a reader who has to subtract two columns to find that three quarters
+  // of the move was price will not do it.
   const both = ok.filter(r => typeof r.p_undervalued_common === "number");
   if (both.length >= 2) {
     const a = both[0], b = both[both.length - 1];
@@ -1869,21 +1743,13 @@ function renderTimeline(d) {
   return h;
 }
 
-// What each driver can be: the band the analyst typed, beside the band the
-// engine actually draws.
-//
-// For three of the five families those are not the same thing, and nothing in
-// the YAML says so. `normal` fits one sigma, so an asymmetric 1/7/11 is drawn
-// as 2/7/12. `lognormal` misses its stated tails by a median of 0.044 of its own
-// band across the shipped set, worst 0.253. And `pert`/`triangular` read p10/p90
-// as hard bounds, so a typed p90 is a maximum rather than a 90th percentile - on
-// a real spec here an analyst typed `p90: 119.6` and the engine's p90 is -866.5.
-//
-// The drift is printed for every driver, and the threshold only decides what
-// gets emphasised. `validate`'s own `quantile_mismatch` notice has a threshold
-// and a 4.89% tail error once sat under it and passed in silence; a panel that
-// printed a number only above its own line would make "fine" and "unmeasured"
-// look identical.
+// The band the analyst typed, beside the band the engine actually draws. For three
+// of the five families those differ and nothing in the YAML says so: `normal` fits
+// one sigma, so an asymmetric 1/7/11 is drawn as 2/7/12; `lognormal` misses its
+// stated tails by a median 0.044 of its own band, worst 0.253; `pert`/`triangular`
+// read p10/p90 as hard bounds, so a typed `p90: 119.6` drew -866.5 on a real spec.
+// Printed for every driver, not only above a threshold: `quantile_mismatch` once
+// hid a 4.89% tail error under its own line.
 function renderMarginals(d) {
   const rows = d.marginals || [];
   let h = `<div class="viz-head">Marginals &ndash; what each driver can be</div>
@@ -1945,24 +1811,16 @@ function renderMarginals(d) {
   return h;
 }
 
-// Λ, the dependence layer, made reviewable.
-//
-// The factor model is the entire dependence layer, and its loadings are
-// specified by judgment and never fitted - a discipline no code can enforce,
-// so review is what enforces it. Until this panel the viewer rendered no
-// loading anywhere, so
-// reviewing Λ meant reading YAML. This is the one view whose job is to be
-// disagreed with.
-//
-// It derives nothing. Σλ² and ψ arrive computed, from the FactorModel that
-// actually samples - a viewer that starts deriving is a second engine.
+// Loadings are specified by judgment and never fitted - a discipline no code can
+// enforce, so review is what enforces it, and until this panel reviewing lambda
+// meant reading YAML. It derives nothing: the sums arrive computed from the
+// FactorModel that samples, because a viewer that derives is a second engine.
 function renderFactors(d) {
   const k = d.factors.length;
   const sgn = v => `${v >= 0 ? "+" : "-"}${Math.abs(v).toFixed(3)}`;
 
-  // Independence is expressed as FactorModel([], {}), the limiting case of the
-  // one dependence path - not a missing model. Saying "no factors" and stopping
-  // would read as a spec that forgot to declare them.
+  // Independence is FactorModel([], {}), the limiting case of the one dependence
+  // path - not a missing model.
   let h = `<div class="viz-head">&Lambda; &ndash; factor loadings</div>
     <div class="viz-sub">${k
       ? `${k} factor${k > 1 ? "s" : ""} &times; ${d.drivers.length} drivers.`
@@ -1992,10 +1850,8 @@ function renderFactors(d) {
       <th title="sum of squared loadings - the share of this driver's variance driven by the common factors">&Sigma;&lambda;&sup2;</th>
       <th title="idiosyncratic standard deviation, sqrt(1 - sum of squared loadings)">&psi;</th>
     </tr></thead><tbody>${d.drivers.map(r => {
-      // psi = 0 means the draw is a deterministic function of the factors. Legal
-      // - it is the comonotonic limit the engine is built on - and worth calling
-      // out, because a spec that did not intend it has a driver with no
-      // independent variation left at all.
+      // psi = 0 is legal, the comonotonic limit - but a spec that did not intend it has
+      // a driver with no independent variation left.
       const full = r.sum_sq >= 1 - 1e-9;
       return `<tr class="${full ? "lam-row-full" : ""}">
         <td>${esc(r.name)}</td>

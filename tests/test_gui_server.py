@@ -236,6 +236,24 @@ def test_a_named_run_computes_only_the_named_specs(stubbed_runs) -> None:
     assert {r["status"] for r in rows if r["name"] != name} == {"not run"}
 
 
+def test_successive_named_runs_accumulate(stubbed_runs) -> None:
+    """Pre-existing, pinned because the viewer's batched fill now rests on it.
+
+    Mutation-checked by returning None where `_portfolio_rows` peeks the cache:
+    reddens this and three neighbours on the same peek. No mutation isolates it.
+    """
+    from gui.server import do_portfolio, list_analyses
+
+    names = [e["name"] for e in list_analyses() if e["has_yaml"]][:2]
+    assert len(names) == 2, "needs two runnable analyses to batch over"
+
+    do_portfolio(repriced=False, names=names[:1])
+    rows = do_portfolio(repriced=False, names=names[1:])["portfolio"]
+
+    assert stubbed_runs == names, "each batch must run only its own names"
+    assert {r["name"] for r in rows if r["status"] == "ok"} == set(names)
+
+
 def test_a_named_run_refuses_an_unknown_name(stubbed_runs) -> None:
     from gui.server import do_portfolio
 

@@ -28,7 +28,7 @@ DOC_CLAIMS = [
         # meant an ASCII "->" read as no claim at all, which fails as loudly as
         # a wrong number for a reason that has nothing to do with the count.
         re.compile(r"Test suite:\s*[\d,]+\s*(?:→|->)\s*([\d,]+)"),
-        "`Test suite: <old> -> <N>` under [Unreleased]",
+        "`Test suite: <old> -> <N>` at the top of the file",
     ),
 ]
 

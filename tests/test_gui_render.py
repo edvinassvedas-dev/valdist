@@ -82,13 +82,18 @@ const api = new Function(src + `
            // as the anchor and the basis are. Driven from here so the two render
            // functions stay pure in this harness's sense: data in, HTML out.
            setView: (query, picked) => {
-             pfQuery = query; pfPicked = new Set(picked); } };`)();
+             pfQuery = query; pfPicked = new Set(picked); },
+           setRunning: v => { pfRunning = v; },
+           setFillError: v => { pfError = v; },
+           __pfBatches: (names, size) => JSON.stringify(pfBatches(names, size)) };`)();
 
 const job = JSON.parse(fs.readFileSync(jobPath, "utf8"));
 if (job.anchor) api.setAnchor(job.anchor);
 if (job.basis !== undefined) api.setBasis(job.basis, job.meta ?? null);
 if (job.analysis !== undefined) api.setAnalysis(job.analysis);
 if (job.view !== undefined) api.setView(...job.view);
+if (job.running !== undefined) api.setRunning(job.running);
+if (job.fill_error !== undefined) api.setFillError(job.fill_error);
 process.stdout.write(api[job.fn](...job.args));
 """
 
@@ -139,6 +144,8 @@ def render(tmp_path_factory):
         meta=None,
         analysis=None,
         view=None,
+        running=None,
+        fill_error=None,
     ) -> str:
         job = tmp / "job.json"
         payload = {"fn": fn, "args": args, "anchor": anchor}
@@ -149,6 +156,10 @@ def render(tmp_path_factory):
             payload["analysis"] = analysis
         if view is not None:
             payload["view"] = view
+        if running is not None:
+            payload["running"] = running
+        if fill_error is not None:
+            payload["fill_error"] = fill_error
         job.write_text(json.dumps(payload), encoding="utf-8")
         done = subprocess.run(  # noqa: S603 - fixed argv, no shell
             [node, str(driver), str(app), str(job)],
@@ -1848,6 +1859,80 @@ def test_a_view_with_nothing_run_does_not_say_nothing_to_show(render) -> None:
     html = render("renderPortfolio", rows, basis=False, meta=PF_META, view=["", []])
     assert "Nothing to show" not in html
     assert "Run all (2)" in html
+
+
+# --- the incremental fill -----------------------------------------------------
+
+
+@pytest.mark.parametrize(("count", "size"), [(0, 8), (1, 8), (8, 8), (9, 8), (68, 8), (3, 1)])
+def test_batching_covers_every_name_exactly_once_and_in_order(render, count, size) -> None:
+    names = [f"n{i}" for i in range(count)]
+    batches = json.loads(render("__pfBatches", names, size))
+    assert [n for b in batches for n in b] == names
+    assert all(0 < len(b) <= size for b in batches), "an empty or oversized batch"
+
+
+def test_a_nonpositive_batch_size_still_terminates(render) -> None:
+    """`i += 0` is a tab that never comes back, not a wrong answer."""
+    names = [f"n{i}" for i in range(5)]
+    for size in (0, -3):
+        batches = json.loads(render("__pfBatches", names, size))
+        assert [n for b in batches for n in b] == names
+
+
+def test_a_fill_in_progress_says_how_far_it_has_got(render) -> None:
+    html = render(
+        "renderPortfolio",
+        PF_PENDING,
+        basis=False,
+        meta=PF_META,
+        view=["", []],
+        running={"done": 24, "total": 68},
+    )
+    assert "Running 24 of 68" in html
+
+
+def test_a_fill_in_progress_offers_no_second_run(render) -> None:
+    html = render(
+        "renderPortfolio",
+        PF_PENDING,
+        basis=False,
+        meta=PF_META,
+        view=["", []],
+        running={"done": 1, "total": 2},
+    )
+    assert "data-pf-run" not in html, "Run all / Run selected offered mid-fill"
+
+
+def test_the_run_buttons_come_back_when_the_fill_is_done(render) -> None:
+    html = render("renderPortfolio", PF_PENDING, basis=False, meta=PF_META, view=["", []])
+    assert "Run all (2)" in html
+
+
+def test_a_fill_that_stopped_early_says_so_rather_than_looking_unstarted(render) -> None:
+    html = render(
+        "renderPortfolio",
+        PF_PENDING,
+        basis=False,
+        meta=PF_META,
+        view=["", []],
+        fill_error="HTTP 500",
+    )
+    assert "Fill stopped" in html and "HTTP 500" in html
+    assert "Run all (2)" in html, "the retry must still be offered"
+
+
+def test_a_fill_error_is_escaped_where_it_is_echoed(render) -> None:
+    html = render(
+        "renderPortfolio",
+        PF_PENDING,
+        basis=False,
+        meta=PF_META,
+        view=["", []],
+        fill_error="<script>x</script>",
+    )
+    assert "<script>x</script>" not in html
+    assert "&lt;script&gt;" in html
 
 
 # --- picking in the sidebar, running a selection ------------------------------
