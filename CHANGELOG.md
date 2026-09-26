@@ -1,6 +1,6 @@
 # Changelog
 
-Test suite: 704 -> 743
+Test suite: 704 -> 747
 
 ## 2026-09-26
 
@@ -19,6 +19,10 @@ Test suite: 704 -> 743
 - `valdist solve`: the deterministic value at every driver's typed p50, and each
   driver's implied input at the price, with `--set NAME=VALUE` for branches.
   Implied inputs and branch values had been computed in ad-hoc scripts.
+
+### Fixed
+
+- Viewer: **All analyses** gains a currency column.
 
 ## 2026-09-20
 

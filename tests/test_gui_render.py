@@ -910,6 +910,41 @@ def test_a_live_quote_is_used_and_labelled(render) -> None:
     assert "live" in html.lower(), "used a moving intraday price without saying so"
 
 
+def _row_cells(html: str, name: str) -> list[str]:
+    row = re.search(rf'data-open="{re.escape(name)}".*?</tr>', html, re.S)
+    assert row, f"no row for {name}"
+    return [_visible(c).strip() for c in re.findall(r"<td[^>]*>(.*?)</td>", row.group(0), re.S)]
+
+
+def test_each_portfolio_row_carries_its_currency(render) -> None:
+    usd = {**PF_ROW, "currency": "USD"}
+    gbp = {**PF_ROW, "name": "2026-08-14-BBB", "currency": "GBp"}
+    html = render("renderPortfolio", [usd, gbp], basis=False, meta=PF_META, view=["", []])
+
+    assert "Ccy" in html, "no currency column header"
+    assert "USD" in _row_cells(html, usd["name"])
+    assert "GBp" in _row_cells(html, gbp["name"])
+
+
+def test_a_row_without_a_quote_invents_no_currency(render) -> None:
+    html = render("renderPortfolio", [{**PF_ROW, "currency": None}], basis=False, meta=PF_META)
+    cells = _row_cells(html, PF_ROW["name"])
+
+    assert not {"USD", "EUR", "GBp", "CAD", "null", "undefined"} & set(cells)
+
+
+def test_the_portfolio_says_only_the_ratio_columns_compare_across_currencies(render) -> None:
+    html = render("renderPortfolio", [{**PF_ROW, "currency": "USD"}], basis=False, meta=PF_META)
+
+    assert "only MoS and P(undervalued) compare across currencies" in _visible(html)
+
+
+def test_the_price_box_names_the_quote_currency(render) -> None:
+    assert "GBp" in render("priceBox", {**QUOTED, "currency": "GBp"}, None, False)
+    unquoted = render("priceBox", {**UNQUOTED, "currency": None}, None, False)
+    assert "null" not in unquoted and "USD" not in unquoted
+
+
 def test_the_portfolio_banner_does_not_claim_spec_prices_when_repriced(render) -> None:
     """The banner's own text was unconditional, and the default makes it load-bearing."""
     rows = [

@@ -727,11 +727,17 @@ function defaultPrice(a) {
   return a?.current_price ?? a?.spec_price ?? "";
 }
 
+// The unit comes from the quote: a spec declares none, so no quote means no unit.
+function ccyTitle(ccy) {
+  return ccy === "GBp" ? ` title="pence, not pounds"` : ccy ? "" : ` title="no quote, so no known currency"`;
+}
+
 function priceBox(a, override, busy) {
   const off = busy ? " disabled" : "";
   const quote = a?.current_price;
   return `<span class="price-box">
-    <label for="price">Price</label>
+    <label for="price"${ccyTitle(a?.currency)}>Price${
+      a?.currency ? ` (${esc(a.currency)})` : ""}</label>
     <input id="price" type="text" inputmode="decimal" value="${
       esc(override ?? defaultPrice(a))}"${off}>
     <span class="hint">spec ${a?.spec_price ?? "?"}</span>
@@ -1513,7 +1519,7 @@ function renderPortfolio(rows) {
 
   if (ok.length) h += `<div class="scroll"><table><thead><tr>
       <th>Analysis</th><th>Age</th><th>MoS (${LAB[mosAnchor]})</th><th>P(undervalued)</th>
-      <th style="width:14%"></th><th>Price</th>
+      <th style="width:14%"></th><th>Price</th><th>Ccy</th>
       <th>P10</th><th>P25</th><th>P50</th><th>P90</th><th>Flags</th>
     </tr></thead><tbody>${ok.map(r => {
       const m = r[key];
@@ -1554,6 +1560,7 @@ function renderPortfolio(rows) {
             }; spec price ${fmt(r.spec_price)}`
           : "the spec's own price"}">${fmt(r.price)}${
           r.repriced ? (r.current_live ? "\u2020" : "*") : ""}</td>
+        <td class="tag"${ccyTitle(r.currency)}>${esc(r.currency ?? "-")}</td>
         <td class="num ${mosAnchor === "p10" ? "" : "tag"}">${fmt(r.value_p10)}</td>
         <td class="num ${mosAnchor === "p25" ? "" : "tag"}">${fmt(r.value_p25)}</td>
         <td class="num ${mosAnchor === "p50" ? "" : "tag"}">${fmt(r.value_p50)}</td>
@@ -1561,7 +1568,9 @@ function renderPortfolio(rows) {
         <td class="tag flags">${flags.join("")}</td>
       </tr>`;
     }).join("")}</tbody></table></div>
-    <p class="tagline">Age is days since the analysis date; over ${STALE_DAYS} is
+    <p class="tagline">Price and P10 to P90 are in each row's own currency, so
+    only MoS and P(undervalued) compare across currencies. Age is days since the
+    analysis date; over ${STALE_DAYS} is
     marked stale, because a saved verdict decays as both the price and the
     fundamentals move. ${repriced ? "A price marked * is a current quote and one "
       + "marked † a live intraday one, neither of them the spec's. " : ""
