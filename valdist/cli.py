@@ -1,4 +1,4 @@
-"""valdist CLI — run | validate | worlds | calibrate."""
+"""valdist CLI — run | solve | validate | worlds | calibrate."""
 
 from __future__ import annotations
 
@@ -51,6 +51,9 @@ def run(
     sampling: str = typer.Option(
         "mc", "--sampling", help="'mc' (default) or 'lhs' (Latin Hypercube Sampling)."
     ),
+    swings: bool = typer.Option(
+        False, "--swings", help="Also print each driver's own effect, others at median."
+    ),
 ) -> None:
     """Run a valuation spec and print results."""
     from valdist import report
@@ -65,6 +68,37 @@ def run(
         nu=model_spec.nu,
     )
     typer.echo(report.to_text(result))
+    if swings:
+        typer.echo(report.format_swings(model.driver_swings()))
+
+
+@app.command()
+def solve(
+    spec: Path = typer.Argument(..., help="Path to YAML/JSON spec file."),
+    set_: list[str] = typer.Option(
+        [], "--set", help="Hold an input at a value, NAME=VALUE; repeatable."
+    ),
+) -> None:
+    """Value at base (every driver at its p50), and each driver's implied input at the price."""
+    from valdist import report
+    from valdist.core.diagnostics import collect_diagnostics
+
+    overrides: dict[str, float] = {}
+    for item in set_:
+        name, sep, raw = item.partition("=")
+        try:
+            overrides[name.strip()] = float(raw)
+        except ValueError:
+            sep = ""
+        if not sep or not name.strip():
+            typer.echo(f"--set expects NAME=VALUE, got {item!r}", err=True)
+            raise typer.Exit(code=1)
+
+    model_spec, model = _load_and_hydrate(spec)
+    with collect_diagnostics() as counts:
+        value = model.value_at(overrides)
+    implied = None if model_spec.price is None else model.implied(model_spec.price, overrides)
+    typer.echo(report.format_solve(value, overrides, sorted(counts), model_spec.price, implied))
 
 
 @app.command()

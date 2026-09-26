@@ -89,6 +89,47 @@ def to_text(result: Result) -> str:
     return "\n".join(lines)
 
 
+def format_swings(swings: list[dict]) -> str:
+    """A tornado bar can take its sign from a shared factor; the signed change here cannot."""
+    lines = [
+        "  Driver swings (p10 -> p90, others at median):",
+    ]
+    for s in sorted(swings, key=lambda s: -s["swing"]):
+        change = s["value_hi"] - s["value_lo"]
+        lines.append(
+            f"    {s['name']:<20s} {s['value_lo']:>10.4f} -> {s['value_hi']:>10.4f}  {change:+.4f}"
+        )
+    return "\n".join(lines)
+
+
+def format_solve(
+    value: float,
+    overrides: dict[str, float],
+    flags: list[str],
+    price: float | None,
+    implied: list[dict] | None,
+) -> str:
+    lines = [f"  Value at base (every driver at its p50): {value:.4f}"]
+    for name, v in overrides.items():
+        lines.append(f"    with {name} = {v:g}")
+    for name in flags:
+        lines.append(f"    FLAGGED at base: {name}")
+    if implied is None:
+        lines.append("  No price in the spec, so nothing to solve for.")
+        return "\n".join(lines)
+    lines.append(f"  Implied inputs (value = price {price:g}, others at base):")
+    for i in implied:
+        if not i["roots"]:
+            found = f"none in [{i['lo']:.4g}, {i['hi']:.4g}]"
+        else:
+            found = ", ".join(
+                f"{x:.4f}" + (f" (flagged: {', '.join(f)})" if f else "")
+                for x, f in zip(i["roots"], i["flags"])
+            )
+        lines.append(f"    {i['name']:<20s} {found}")
+    return "\n".join(lines)
+
+
 def _wrap_warning(text: str, width: int = 46) -> list[str]:
     """Wrap one warning to the report's box width, indented under WARNINGS."""
     import textwrap

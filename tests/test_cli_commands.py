@@ -34,6 +34,29 @@ def test_run_accepts_lhs_sampling() -> None:
     assert "P(undervalued)" in result.output
 
 
+def test_run_swings_prints_each_drivers_own_signed_effect() -> None:
+    from valdist.spec.loader import hydrate, load_spec
+
+    swings = hydrate(load_spec(VICI_SPEC_PATH)).driver_swings()
+    result = runner.invoke(app, ["run", VICI, "--swings"])
+    assert result.exit_code == 0, result.output
+    section = result.output.split("Driver swings")[1]
+    rows = [line.split() for line in section.splitlines() if line.startswith("    ")]
+    assert [r[0] for r in rows] == [s["name"] for s in sorted(swings, key=lambda s: -s["swing"])], (
+        "sorted by size"
+    )
+    for s in swings:
+        row = next(r for r in rows if r[0] == s["name"])
+        # the signed change is the sign check; the unsigned swing cannot be
+        assert float(row[-1]) == pytest.approx(s["value_hi"] - s["value_lo"], abs=5e-5)
+
+
+def test_run_prints_no_swings_unless_asked() -> None:
+    result = runner.invoke(app, ["run", VICI])
+    assert result.exit_code == 0, result.output
+    assert "Driver swings" not in result.output
+
+
 # --------------------------------------------------------------------------- #
 # validate: the non-fatal notice branch
 # --------------------------------------------------------------------------- #

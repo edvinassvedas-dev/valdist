@@ -37,7 +37,7 @@ exploring the results.
 ```bash
 pip install -e .          # core: numpy, scipy, pydantic, typer, PyYAML
 pip install -e ".[plot]"  # adds matplotlib, only for `valdist plot`
-pytest -q                 # 704 tests, all green
+pytest -q                 # 743 tests, all green
 ```
 
 Tests need **node** on `PATH`: the viewer's render functions run against
@@ -52,7 +52,7 @@ promoting a frozen assumption to a sampled driver needs no code change.
 ```yaml
 schema_version: "1.0"
 name: "2026-06-28-VICI"
-valuation: reit_v2        # reit_v2 | equity_v2 | preferred_v1
+valuation: reit_v2        # reit_v2 | equity_v2 | preferred_v1 | clinical_v1
 price: 27.21
 seed: 0
 n: 50000
@@ -107,15 +107,17 @@ something.** Read it before the percentiles:
   spread, not no doubt. Your bands are too narrow to be informative.
 
 The tornado is a **rank correlation** – it says which driver moves the value
-monotonically, never by how much. For magnitude use `Model.driver_swings()`;
-the two orderings can invert.
+monotonically, never by how much, and a driver can borrow its sign from a
+factor it shares. For magnitude and sign use `valdist run <spec> --swings`
+(`Model.driver_swings()`); the two orderings can invert.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
 | `valdist validate <spec>` | Every spec error at once, plus non-fatal quality notices |
-| `valdist run <spec>` | Percentiles, `P(undervalued)` ± stderr, tornado, warnings |
+| `valdist run <spec>` | Percentiles, `P(undervalued)` ± stderr, tornado, warnings; `--swings` adds each driver's own signed effect |
+| `valdist solve <spec>` | Deterministic value with every driver at its typed p50, and each driver's implied input at the price (every root, flagged when it sits on a floor); `--set NAME=VALUE` holds an input, e.g. a branch |
 | `valdist worlds <spec>` | The driver values behind the P10 / P50 / P90 outcomes |
 | `valdist plot <spec> --out f.png` | `--kind tornado\|distribution`, `--theme light\|dark` |
 | `valdist calibrate <folder>` | Fraction of realised outcomes inside the P10–P90 band |
@@ -173,6 +175,7 @@ today, not a fixed list** – see [Writing your own](#writing-your-own-adapter).
 | `reit_v2` | DDM + AFFO-DCF (FCFE) + cap-rate NAV, weighted `w_ddm`/`w_affo`/`w_nav` | `dps`, `div_growth`, `div_terminal`, `ddm_stage1_years`, `affo`, `affo_growth`, `affo_terminal`, `affo_years`, `cost_of_equity`, `noi`, `cap_rate`, `nav_debt`, `nav_other`, `shares`, `w_ddm`, `w_affo`, `w_nav` |
 | `equity_v2` | DCF (FCFF) + EPV + relative, weighted `w_dcf`/`w_epv`/`w_relative` | `fcff`, `fcf_growth`, `terminal_growth`, `wacc`, `years`, `normalized_earnings`, `relative_value_per_share`, `debt`, `cash`, `shares`, `w_dcf`, `w_epv`, `w_relative` |
 | `preferred_v1` | Fixed-coupon perpetual with an issuer call option | `par`, `coupon_rate`, `required_yield`, `call_probability`, `years_to_call`, `arrears` |
+| `clinical_v1` | Pre-revenue drug developer: net cash, less the burn to approval, plus a probability-weighted asset. One binary asset valued at approval, net of launch costs; burn after `years_to_readout` is paid only on approval; a negative asset draw is floored at zero and flagged; no wind-down; the raise lands today at `raise_price` | `cash`, `debt`, `other_liabilities`, `shares`, `years_to_approval`, `annual_burn`, `discount_rate`, `approval_probability`, `asset_value`, `raise_amount`, `raise_price`; optional `years_to_readout` (defaults to `years_to_approval`) |
 
 Query the running set programmatically rather than trusting this table to stay
 current:
@@ -238,8 +241,8 @@ Three things the registry enforces on your behalf:
 ## Design constraints
 
 - **Valuation-agnostic core.** `core/` holds no domain math. A valuation is a
-  `callable(sample: dict) -> float`; REIT, equity and preferred logic live in
-  `valdist.adapters`. Adapters surface per-draw conditions through a generic
+  `callable(sample: dict) -> float`; REIT, equity, preferred and clinical-stage
+  logic live in `valdist.adapters`. Adapters surface per-draw conditions through a generic
   named-flag channel – the engine counts flags without knowing what they mean.
 - **Determinism.** Same spec + seed → identical output, whatever the sampling
   mode.

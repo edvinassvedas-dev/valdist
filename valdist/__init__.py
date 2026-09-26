@@ -17,6 +17,7 @@ __all__ = [
 ]
 
 # Import adapter modules so their @register decorators execute at package load.
+import valdist.adapters.clinical  # noqa: F401, E402
 import valdist.adapters.equity  # noqa: F401, E402
 import valdist.adapters.preferred  # noqa: F401, E402
 import valdist.adapters.reit  # noqa: F401, E402

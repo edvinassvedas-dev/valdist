@@ -152,6 +152,57 @@ class Model:
             )
         return out
 
+    def value_at(self, overrides: Mapping[str, float] | None = None) -> float:
+        """Value with every driver at its TYPED p50, which for pert is the mode, not ppf(0.5)."""
+        base = {d.name: float(d.p50) for d in self.drivers}
+        return float(self.valuation({**self.constants, **base, **(overrides or {})}))
+
+    def implied(
+        self,
+        price: float,
+        overrides: Mapping[str, float] | None = None,
+        span: float = 10.0,
+        grid: int = 801,
+    ) -> list[dict]:
+        """Every input, per driver, at which `value_at` equals `price`; roots are
+        searched on p50 +/- span x (p90 - p10), and value need not be monotone.
+        """
+        from scipy.optimize import brentq
+
+        fixed = dict(overrides or {})
+        out = []
+        for d in self.drivers:
+            if d.name in fixed:
+                continue
+            width = span * (d.p90 - d.p10) or span * max(abs(d.p50), 1.0)
+            lo, hi = d.p50 - width, d.p50 + width
+
+            def gap(x: float, name: str = d.name) -> float:
+                return self.value_at({**fixed, name: x}) - price
+
+            xs = np.linspace(lo, hi, grid)
+            with collect_diagnostics():
+                gs = [gap(x) for x in xs]
+                # A flat run at the price (a floored input) is one root, not hundreds.
+                roots = [
+                    float(x)
+                    for i, (x, g) in enumerate(zip(xs, gs))
+                    if g == 0.0 and (i == 0 or gs[i - 1] != 0.0)
+                ]
+                roots += [
+                    float(brentq(gap, a, b, xtol=1e-12))
+                    for a, b, ga, gb in zip(xs, xs[1:], gs, gs[1:])
+                    if ga * gb < 0.0
+                ]
+            roots.sort()
+            flags = []
+            for x in roots:
+                with collect_diagnostics() as counts:
+                    self.value_at({**fixed, d.name: x})
+                flags.append(sorted(counts))
+            out.append({"name": d.name, "lo": lo, "hi": hi, "roots": roots, "flags": flags})
+        return out
+
     def run(
         self,
         n: int = 50_000,
