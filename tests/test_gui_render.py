@@ -22,6 +22,7 @@ EXERCISED = (
     "rangeStrip",
     "renderList",
     "priceBox",
+    "quoteAge",
     "renderPortfolio",
     "renderSuggest",
     "renderFactors",
@@ -62,7 +63,7 @@ globalThis.location = { protocol: "http:", hash: "" };
 const src = fs.readFileSync(appPath, "utf8");
 const api = new Function(src + `
   return { histogram, renderLadder, renderCompare, rangeStrip, renderList,
-           priceBox, renderPortfolio, renderSuggest, renderFactors, renderTimeline,
+           priceBox, quoteAge, renderPortfolio, renderSuggest, renderFactors, renderTimeline,
            renderMarginals, renderValidate, renderRun, renderConvergence, renderWorlds,
            setAnchor: v => { mosAnchor = v; },
            // The price basis is module state read by renderPortfolio, exactly as
@@ -900,6 +901,41 @@ def test_a_typed_price_outranks_the_default(render) -> None:
 
     assert 'value="88.5"' in html
     assert 'value="74.9"' not in html, "a typed price was overwritten by the quote"
+
+
+def test_the_quote_age_is_shown_from_every_view(render) -> None:
+    html = _visible(render("quoteAge", {"available": True, "as_of": "2026-09-18", "age_days": 3}))
+
+    assert "2026-09-18" in html and "3d" in html
+    assert "stale" not in html
+
+
+def test_stale_quotes_say_so_and_how_to_refresh(render) -> None:
+    html = _visible(render("quoteAge", {"available": True, "as_of": "2026-09-18", "age_days": 8}))
+
+    assert "stale" in html
+    assert "python -m prices.fetch" in html, "the fix is still hidden in a tooltip"
+
+
+def test_the_quote_age_uses_the_analyses_threshold(render) -> None:
+    at = _visible(render("quoteAge", {"available": True, "as_of": "x", "age_days": 7}))
+    past = _visible(render("quoteAge", {"available": True, "as_of": "x", "age_days": 8}))
+
+    assert "stale" not in at and "stale" in past
+
+
+def test_no_quotes_says_how_to_get_them(render) -> None:
+    html = _visible(render("quoteAge", {"available": False, "as_of": None, "age_days": None}))
+
+    assert "no quotes" in html and "python -m prices.fetch" in html
+    assert "null" not in html and "undefined" not in html
+
+
+def test_an_undated_quote_file_claims_no_age(render) -> None:
+    html = _visible(render("quoteAge", {"available": True, "as_of": None, "age_days": None}))
+
+    assert "undefined" not in html and "null" not in html and "NaN" not in html
+    assert "stale" not in html and "today" not in html
 
 
 def test_a_live_quote_is_used_and_labelled(render) -> None:

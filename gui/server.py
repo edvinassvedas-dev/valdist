@@ -422,6 +422,16 @@ def read_current_prices() -> dict:
     }
 
 
+def quote_freshness() -> dict:
+    current = read_current_prices()
+    as_of = str(current.get("as_of"))[:10]
+    try:
+        age = _days_since(as_of)
+    except ValueError:
+        return {"available": current["available"], "as_of": None, "age_days": None}
+    return {"available": current["available"], "as_of": as_of, "age_days": age}
+
+
 #: What a ticker is allowed to look like. Letters, digits, dot and hyphen cover
 #: every real symbol shape (`A12`, `BRK.B`, `RDS-A`) and nothing that means
 #: something to a URL.
@@ -443,7 +453,11 @@ def _dated(name: str) -> tuple[str | None, int | None]:
     as_of = _as_of_of(name)
     if as_of is None:
         return None, None
-    return as_of, (_dt.date.today() - _dt.date.fromisoformat(as_of)).days
+    return as_of, _days_since(as_of)
+
+
+def _days_since(iso_date: str) -> int:
+    return (_dt.date.today() - _dt.date.fromisoformat(iso_date)).days
 
 
 def do_portfolio(
@@ -807,7 +821,7 @@ def _names(query: dict) -> list[str] | None:
 
 
 ROUTES = {
-    "/api/analyses": lambda q: {"analyses": list_analyses()},
+    "/api/analyses": lambda q: {"analyses": list_analyses(), "quotes": quote_freshness()},
     "/api/analysis": lambda q: read_analysis(_name(q)),
     "/api/validate": lambda q: do_validate(_name(q)),
     "/api/run": lambda q: do_run(_name(q), _price(q)),

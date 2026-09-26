@@ -34,6 +34,7 @@
   aside h1 { font-size: 14px; letter-spacing: .06em; text-transform: uppercase;
              color: var(--muted); margin: 0 0 4px; }
   aside .sub { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+  aside .sub.stale { color: var(--viz-neg); }
   /* The filter sits above #list and outside it, so redrawing the list on every
      keystroke cannot take the focus or the caret out of the field being typed
      into. */
@@ -477,6 +478,7 @@
 <aside>
   <h1>valdist</h1>
   <div class="sub">read-only viewer</div>
+  <div id="quotes"></div>
   <input id="search" type="search" placeholder="Filter: ticker or date"
          autocomplete="off" spellcheck="false" aria-label="Filter analyses">
   <div id="list"></div>
@@ -674,13 +676,14 @@ function renderList(analyses, query, selected, grouped) {
 
 async function boot() {
   if (location.protocol === "file:") { showNoServer(true); return; }
-  let analyses;
+  let analyses, quotes;
   try {
-    ({ analyses } = await api("/api/analyses"));
+    ({ analyses, quotes } = await api("/api/analyses"));
   } catch {
     showNoServer(false);
     return;
   }
+  $("#quotes").innerHTML = quoteAge(quotes);
   allNames = analyses.map(a => a.name);
   drawList = () => {
     $("#list").innerHTML = renderList(analyses, $("#search").value, selected, groupByTicker);
@@ -730,6 +733,15 @@ function defaultPrice(a) {
 // The unit comes from the quote: a spec declares none, so no quote means no unit.
 function ccyTitle(ccy) {
   return ccy === "GBp" ? ` title="pence, not pounds"` : ccy ? "" : ` title="no quote, so no known currency"`;
+}
+
+function quoteAge(q) {
+  const fetch = `<code>python -m prices.fetch</code>`;
+  if (!q?.available) return `<div class="sub">no quotes - run ${fetch}</div>`;
+  const age = ageInfo(q.age_days);
+  if (!age) return `<div class="sub">quotes undated</div>`;
+  return `<div class="sub${age.stale ? " stale" : ""}">quotes ${esc(q.as_of)} (${age.text})${
+    age.stale ? `, stale - refresh with ${fetch}` : ""}</div>`;
 }
 
 function priceBox(a, override, busy) {
@@ -1570,13 +1582,9 @@ function renderPortfolio(rows) {
     }).join("")}</tbody></table></div>
     <p class="tagline">Price and P10 to P90 are in each row's own currency, so
     only MoS and P(undervalued) compare across currencies. Age is days since the
-    analysis date; over ${STALE_DAYS} is
-    marked stale, because a saved verdict decays as both the price and the
-    fundamentals move. ${repriced ? "A price marked * is a current quote and one "
-      + "marked † a live intraday one, neither of them the spec's. " : ""
-      }The value column matching the anchor is highlighted; the
-    other two are muted. The hairline on each P(undervalued) bar is 0.50. Click a
-    row to open it.</p>`;
+    analysis date; over ${STALE_DAYS} is marked stale.${repriced
+      ? "<br>* is a current quote and † a live intraday one, neither of them the spec's."
+      : ""}</p>`;
 
   if (bad.length) {
     h += `<div class="banner err"><b>${

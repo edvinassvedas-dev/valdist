@@ -387,14 +387,14 @@ def test_the_corpus_composition_is_exactly_as_built() -> None:
 
 
 def test_the_age_is_computed_in_exactly_one_place() -> None:
-    """`_dated()` owns the clock, and this is the case that actually pins it."""
+    """`_days_since()` owns the clock, and this is the case that actually pins it."""
     import gui.server as gs
 
     src = pathlib.Path(gs.__file__).read_text(encoding="utf-8")
     clocks = re.findall(r"_dt\.date\.today\(\)", src)
     assert len(clocks) == 1, (
         f"gui/server.py reads the clock in {len(clocks)} places; age belongs to "
-        "_dated() alone, so no two surfaces can disagree about how old a row is"
+        "_days_since() alone, so no two surfaces can disagree about how old a row is"
     )
     subtractions = re.findall(r"-\s*_dt\.date\.fromisoformat", src)
     assert len(subtractions) == 1, f"{len(subtractions)} age subtractions; expected 1"
@@ -788,3 +788,32 @@ def test_the_basis_parameter_distinguishes_absent_from_off(query, expected) -> N
     from gui.server import _tristate
 
     assert _tristate(query, "repriced") is expected
+
+
+@pytest.mark.parametrize("as_of", ["2026-09-18T14:18:40+00:00", "2026-09-18"])
+def test_the_listing_carries_the_quotes_age(monkeypatch, as_of) -> None:
+    import datetime as dt
+
+    import gui.server as gs
+
+    age = (dt.date.today() - dt.date(2026, 9, 18)).days
+    monkeypatch.setattr(
+        gs, "read_current_prices", lambda: {"available": True, "as_of": as_of, "prices": {}}
+    )
+
+    quotes = gs.ROUTES["/api/analyses"]({})["quotes"]
+    assert quotes == {"available": True, "as_of": "2026-09-18", "age_days": age}
+
+
+@pytest.mark.parametrize(
+    "current",
+    [{"available": False, "prices": {}}, {"available": True, "as_of": "garbage", "prices": {}}],
+)
+def test_quotes_with_no_readable_date_get_no_age(monkeypatch, current) -> None:
+    import gui.server as gs
+
+    monkeypatch.setattr(gs, "read_current_prices", lambda: current)
+    quotes = gs.ROUTES["/api/analyses"]({})["quotes"]
+
+    assert quotes["available"] is current["available"]
+    assert quotes["age_days"] is None
