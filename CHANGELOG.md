@@ -1,8 +1,12 @@
 # Changelog
 
-Test suite: 756 -> 765
+Test suite: 756 -> 770
 
 ## 2026-10-21
+
+### Added
+
+- `valdist solve --price X` solves at today's price without editing the spec.
 
 ### Fixed
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Literal
 
@@ -78,6 +79,9 @@ def solve(
     set_: list[str] = typer.Option(
         [], "--set", help="Hold an input at a value, NAME=VALUE; repeatable."
     ),
+    price: float | None = typer.Option(
+        None, "--price", help="Solve at this price instead of the spec's."
+    ),
 ) -> None:
     """Value at base (every driver at its p50), and each driver's implied input at the price."""
     from valdist import report
@@ -95,6 +99,10 @@ def solve(
             typer.echo(f"--set expects NAME=VALUE, got {item!r}", err=True)
             raise typer.Exit(code=1)
 
+    if price is not None and not (math.isfinite(price) and price > 0):
+        typer.echo(f"--price must be positive and finite, got {price}", err=True)
+        raise typer.Exit(code=1)
+
     model_spec, model = _load_and_hydrate(spec)
     required = required_inputs(model_spec.valuation)
     if required is None:
@@ -111,8 +119,9 @@ def solve(
         raise typer.Exit(code=1)
     with collect_diagnostics() as counts:
         value = model.value_at(overrides)
-    implied = None if model_spec.price is None else model.implied(model_spec.price, overrides)
-    typer.echo(report.format_solve(value, overrides, sorted(counts), model_spec.price, implied))
+    target = model_spec.price if price is None else price
+    implied = None if target is None else model.implied(target, overrides)
+    typer.echo(report.format_solve(value, overrides, sorted(counts), target, implied))
 
 
 @app.command()

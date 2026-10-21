@@ -205,3 +205,24 @@ def test_cli_solve_falls_back_to_spec_inputs_when_the_adapter_declares_none(tmp_
     assert held.exit_code == 0, held.output
     assert "6.0000" in held.output
     assert bad.exit_code == 1
+
+
+def test_cli_solve_price_replaces_the_spec_price():
+    from valdist.spec.loader import hydrate, load_spec
+
+    spec = load_spec(VICI)
+    model = hydrate(spec)
+    price = spec.price * 1.2
+    result = runner.invoke(app, ["solve", VICI, "--price", str(price)])
+    assert result.exit_code == 0, result.output
+    implied = result.output.split("Implied")[1]
+    assert f"value = price {price:g}" in implied
+    (root,) = {i["name"]: i for i in model.implied(price)}[model.names[0]]["roots"]
+    assert f"{root:.4f}" in implied
+
+
+@pytest.mark.parametrize("bad", ["0", "-1", "nan", "inf"])
+def test_cli_solve_rejects_a_price_that_is_not_positive_and_finite(bad):
+    result = runner.invoke(app, ["solve", VICI, f"--price={bad}"])
+    assert result.exit_code == 1
+    assert "--price" in result.output
