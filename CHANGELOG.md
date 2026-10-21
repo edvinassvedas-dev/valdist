@@ -30,7 +30,6 @@ Test suite: 756 -> 770
 - `valdist solve`: the deterministic value at every driver's typed p50, and each
   driver's implied input at the price, with `--set NAME=VALUE` for branches.
   Implied inputs and branch values had been computed in ad-hoc scripts.
-- Viewer: showing how old the quotes are.
 
 ### Fixed
 
