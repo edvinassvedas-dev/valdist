@@ -1,6 +1,13 @@
 # Changelog
 
-Test suite: 704 -> 756
+Test suite: 756 -> 765
+
+## 2026-10-21
+
+### Fixed
+
+- `valdist solve --set` used to ignore misspelled or unknown names without
+  saying so. Now it stops and tells you.
 
 ## 2026-09-26
 

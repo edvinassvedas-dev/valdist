@@ -81,6 +81,7 @@ def solve(
 ) -> None:
     """Value at base (every driver at its p50), and each driver's implied input at the price."""
     from valdist import report
+    from valdist.adapters.registry import optional_inputs, required_inputs
     from valdist.core.diagnostics import collect_diagnostics
 
     overrides: dict[str, float] = {}
@@ -95,6 +96,19 @@ def solve(
             raise typer.Exit(code=1)
 
     model_spec, model = _load_and_hydrate(spec)
+    required = required_inputs(model_spec.valuation)
+    if required is None:
+        known = set(model.names) | set(model.constants)
+    else:
+        known = set(required) | (optional_inputs(model_spec.valuation) or set())
+    unknown = sorted(set(overrides) - known)
+    if unknown:
+        typer.echo(
+            f"--set names no input of '{model_spec.valuation}': {', '.join(unknown)}; "
+            f"known: {', '.join(sorted(known))}",
+            err=True,
+        )
+        raise typer.Exit(code=1)
     with collect_diagnostics() as counts:
         value = model.value_at(overrides)
     implied = None if model_spec.price is None else model.implied(model_spec.price, overrides)

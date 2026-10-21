@@ -9,12 +9,14 @@ import pytest
 
 from valdist.adapters.registry import (
     _BLEND_WEIGHTS,
+    _OPTIONAL,
     _POSITIVE_YEARS,
     _REGISTRY,
     _REQUIRES,
     get_valuation,
     is_registered,
     known_valuations,
+    optional_inputs,
     positive_year_inputs,
     register,
     required_inputs,
@@ -30,6 +32,7 @@ def _cleanup():
     _REQUIRES.pop(_NAME, None)
     _POSITIVE_YEARS.pop(_NAME, None)
     _BLEND_WEIGHTS.pop(_NAME, None)
+    _OPTIONAL.pop(_NAME, None)
 
 
 def test_get_valuation_unregistered_name_raises_key_error():
@@ -177,3 +180,23 @@ def test_reregistration_without_requires_clears_the_stale_entry():
     assert required_inputs(_NAME) is None, "stale requires survived re-registration"
     assert positive_year_inputs(_NAME) is None, "stale positive_years survived re-registration"
     assert blend_weight_inputs(_NAME) is None, "stale blend_weights survived re-registration"
+
+
+def test_optional_inputs_declared_by_adapter():
+    @register(_NAME, requires={"x"}, optional={"y"})
+    def fn(v):
+        return v["x"] + v.get("y", 0.0)
+
+    assert optional_inputs(_NAME) == frozenset({"y"})
+
+
+def test_optional_inputs_none_when_not_declared():
+    @register(_NAME, requires={"x"})
+    def fn(v):
+        return v["x"]
+
+    assert optional_inputs(_NAME) is None
+
+
+def test_clinical_declares_its_optional_readout():
+    assert optional_inputs("clinical_v1") == frozenset({"years_to_readout"})

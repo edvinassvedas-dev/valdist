@@ -8,6 +8,7 @@ _REGISTRY: dict[str, Callable] = {}
 _REQUIRES: dict[str, frozenset[str]] = {}
 _POSITIVE_YEARS: dict[str, frozenset[str]] = {}
 _BLEND_WEIGHTS: dict[str, frozenset[str]] = {}
+_OPTIONAL: dict[str, frozenset[str]] = {}
 
 
 def register(
@@ -15,6 +16,7 @@ def register(
     requires: Iterable[str] | None = None,
     positive_years: Iterable[str] | None = None,
     blend_weights: Iterable[str] | None = None,
+    optional: Iterable[str] | None = None,
 ) -> Callable:
     """Decorator that registers a valuation callable under *name*."""
 
@@ -29,12 +31,15 @@ def register(
         _REQUIRES.pop(name, None)
         _POSITIVE_YEARS.pop(name, None)
         _BLEND_WEIGHTS.pop(name, None)
+        _OPTIONAL.pop(name, None)
         if requires is not None:
             _REQUIRES[name] = frozenset(requires)
         if positive_years is not None:
             _POSITIVE_YEARS[name] = frozenset(positive_years)
         if blend_weights is not None:
             _BLEND_WEIGHTS[name] = frozenset(blend_weights)
+        if optional is not None:
+            _OPTIONAL[name] = frozenset(optional)
         return fn
 
     return decorator
@@ -73,3 +78,8 @@ def blend_weight_inputs(name: str) -> frozenset[str] | None:
     """Inputs of *name* that are method-blending weights (must sum to 100), or
     None if it didn't declare any."""
     return _BLEND_WEIGHTS.get(name)
+
+
+def optional_inputs(name: str) -> frozenset[str] | None:
+    """Keys *name*'s valuation reads only if present, or None if it didn't declare."""
+    return _OPTIONAL.get(name)

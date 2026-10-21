@@ -116,3 +116,92 @@ def test_cli_solve_applies_set_overrides():
 def test_cli_solve_rejects_a_malformed_set():
     result = runner.invoke(app, ["solve", VICI, "--set", "no_equals_sign"])
     assert result.exit_code == 1
+
+
+@pytest.mark.parametrize("name", ["price", "no_such_input"])
+def test_cli_solve_rejects_a_set_name_the_model_never_reads(name):
+    # `--set price=33.4` printed "with price = 33.4" and solved at the spec's price.
+    result = runner.invoke(app, ["solve", VICI, "--set", f"{name}=1.0"])
+    assert result.exit_code == 1
+    assert name in result.output
+
+
+def test_cli_solve_accepts_a_constant():
+    from valdist.spec.loader import hydrate, load_spec
+
+    model = hydrate(load_spec(VICI))
+    name = sorted(model.constants)[0]
+    result = runner.invoke(app, ["solve", VICI, "--set", f"{name}=1.0"])
+    assert result.exit_code == 0, result.output
+    assert f"{model.value_at({name: 1.0}):.4f}" in result.output
+
+
+CLINICAL = """\
+schema_version: "1.0"
+name: clinical-probe
+valuation: clinical_v1
+price: 0.5
+seed: 0
+n: 1000
+factors: []
+drivers:
+  discount_rate:
+    marginal: {family: normal, p10: 12.0, p50: 15.0, p90: 18.0}
+  approval_probability:
+    marginal: {family: normal, p10: 20.0, p50: 25.0, p90: 30.0}
+constants:
+  cash: 57.4
+  debt: 0.0
+  other_liabilities: 11.3
+  shares: 98.1
+  years_to_approval: 3
+  annual_burn: 30.0
+  asset_value: 800.0
+  raise_amount: 0.0
+  raise_price: 0.40
+"""
+
+
+def test_cli_solve_rejects_a_constant_the_adapter_never_reads(tmp_path):
+    spec = tmp_path / "clinical.yaml"
+    spec.write_text(CLINICAL + "  unread: 1.0\n")
+    result = runner.invoke(app, ["solve", str(spec), "--set", "unread=2.0"])
+    assert result.exit_code == 1
+    assert "unread" in result.output
+
+
+def test_cli_solve_accepts_an_optional_input_the_spec_omits(tmp_path):
+    spec = tmp_path / "clinical.yaml"
+    spec.write_text(CLINICAL)
+    from valdist.spec.loader import hydrate, load_spec
+
+    model = hydrate(load_spec(spec))
+    result = runner.invoke(app, ["solve", str(spec), "--set", "years_to_readout=1"])
+    assert result.exit_code == 0, result.output
+    held = model.value_at({"years_to_readout": 1.0})
+    assert held != model.value_at()
+    assert f"{held:.4f}" in result.output
+
+
+def test_cli_solve_falls_back_to_spec_inputs_when_the_adapter_declares_none(tmp_path):
+    from valdist.adapters.registry import _REGISTRY, register
+
+    @register("_solve_probe")
+    def probe(v):
+        return v["x"] + v["c"]
+
+    spec = tmp_path / "probe.yaml"
+    spec.write_text(
+        'schema_version: "1.0"\nname: probe\nvaluation: _solve_probe\nprice: 5.0\n'
+        "seed: 0\nn: 100\nfactors: []\n"
+        "drivers:\n  x:\n    marginal: {family: normal, p10: 1.0, p50: 2.0, p90: 3.0}\n"
+        "constants:\n  c: 1.0\n"
+    )
+    try:
+        held = runner.invoke(app, ["solve", str(spec), "--set", "c=4.0"])
+        bad = runner.invoke(app, ["solve", str(spec), "--set", "price=4.0"])
+    finally:
+        _REGISTRY.pop("_solve_probe", None)
+    assert held.exit_code == 0, held.output
+    assert "6.0000" in held.output
+    assert bad.exit_code == 1

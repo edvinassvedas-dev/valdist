@@ -66,6 +66,7 @@ def _clinical_value(
         "raise_amount",
         "raise_price",
     },
+    optional={"years_to_readout"},
     # not positive_years: years_to_approval = 0 is legal
 )
 def clinical_v1(v: dict) -> float:
