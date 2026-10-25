@@ -71,6 +71,24 @@ def test_run_rejects_a_price_that_is_not_positive_and_finite(bad: str) -> None:
     assert "--price" in result.output
 
 
+def test_run_json_prints_the_report_payload_at_the_run_price() -> None:
+    from valdist import report
+    from valdist.spec.loader import hydrate, load_spec
+
+    spec = load_spec(VICI_SPEC_PATH)
+    price = spec.price * 1.2
+    expected = hydrate(spec).run(n=spec.n, price=price, seed=spec.seed, nu=spec.nu)
+    result = runner.invoke(app, ["run", VICI, "--json", "--price", str(price)])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == json.loads(report.to_json(expected))
+
+
+def test_run_refuses_json_with_swings() -> None:
+    result = runner.invoke(app, ["run", VICI, "--json", "--swings"])
+    assert result.exit_code == 1
+    assert "--json" in result.output and "--swings" in result.output
+
+
 def test_run_prints_no_swings_unless_asked() -> None:
     result = runner.invoke(app, ["run", VICI])
     assert result.exit_code == 0, result.output

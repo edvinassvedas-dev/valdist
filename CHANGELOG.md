@@ -1,6 +1,6 @@
 # Changelog
 
-Test suite: 770 -> 775
+Test suite: 775 -> 777
 
 ## 2026-10-25
 
@@ -8,6 +8,8 @@ Test suite: 770 -> 775
 
 - `valdist run --price X` runs at a price other than the spec's. Value
   percentiles are unchanged; `P(undervalued)` and the margins move.
+- `valdist run --json` prints the versioned `to_json()` payload, so a run can be
+  scripted. Refused with `--swings`, which the payload does not carry.
 
 ## 2026-10-21
 

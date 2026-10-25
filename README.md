@@ -37,7 +37,7 @@ exploring the results.
 ```bash
 pip install -e .          # core: numpy, scipy, pydantic, typer, PyYAML
 pip install -e ".[plot]"  # adds matplotlib, only for `valdist plot`
-pytest -q                 # 775 tests, all green
+pytest -q                 # 777 tests, all green
 ```
 
 Tests need **node** on `PATH`: the viewer's render functions run against
@@ -116,7 +116,7 @@ factor it shares. For magnitude and sign use `valdist run <spec> --swings`
 | Command | What it does |
 |---|---|
 | `valdist validate <spec>` | Every spec error at once, plus non-fatal quality notices |
-| `valdist run <spec>` | Percentiles, `P(undervalued)` ± stderr, tornado, warnings; `--swings` adds each driver's own signed effect; `--price X` runs at a price other than the spec's |
+| `valdist run <spec>` | Percentiles, `P(undervalued)` ± stderr, tornado, warnings; `--swings` adds each driver's own signed effect; `--price X` runs at a price other than the spec's; `--json` prints the report payload instead of text |
 | `valdist solve <spec>` | Deterministic value with every driver at its typed p50, and each driver's implied input at the price (every root, flagged when it sits on a floor); `--set NAME=VALUE` holds an input, e.g. a branch, and refuses a name the adapter does not read; `--price X` solves at a price other than the spec's |
 | `valdist worlds <spec>` | The driver values behind the P10 / P50 / P90 outcomes |
 | `valdist plot <spec> --out f.png` | `--kind tornado\|distribution`, `--theme light\|dark` |

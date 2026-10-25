@@ -64,12 +64,16 @@ def run(
     price: float | None = typer.Option(
         None, "--price", help="Run at this price instead of the spec's."
     ),
+    as_json: bool = typer.Option(False, "--json", help="Print the report as JSON."),
 ) -> None:
     """Run a valuation spec and print results."""
     from valdist import report
 
     sampling_literal = _checked_sampling(sampling)
     _checked_price(price)
+    if as_json and swings:
+        typer.echo("--json and --swings cannot be combined", err=True)
+        raise typer.Exit(code=1)
     model_spec, model = _load_and_hydrate(spec)
     result = model.run(
         n=model_spec.n,
@@ -78,7 +82,7 @@ def run(
         sampling=sampling_literal,
         nu=model_spec.nu,
     )
-    typer.echo(report.to_text(result))
+    typer.echo(report.to_json(result) if as_json else report.to_text(result))
     if swings:
         typer.echo(report.format_swings(model.driver_swings()))
 
