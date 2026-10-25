@@ -51,6 +51,26 @@ def test_run_swings_prints_each_drivers_own_signed_effect() -> None:
         assert float(row[-1]) == pytest.approx(s["value_hi"] - s["value_lo"], abs=5e-5)
 
 
+def test_run_price_replaces_the_spec_price() -> None:
+    from valdist import report
+    from valdist.spec.loader import hydrate, load_spec
+
+    spec = load_spec(VICI_SPEC_PATH)
+    price = spec.price * 1.2
+    expected = hydrate(spec).run(n=spec.n, price=price, seed=spec.seed, nu=spec.nu)
+    result = runner.invoke(app, ["run", VICI, "--price", str(price)])
+    assert result.exit_code == 0, result.output
+    assert result.output.strip() == report.to_text(expected).strip()
+    assert result.output != runner.invoke(app, ["run", VICI]).output
+
+
+@pytest.mark.parametrize("bad", ["0", "-1", "nan", "inf"])
+def test_run_rejects_a_price_that_is_not_positive_and_finite(bad: str) -> None:
+    result = runner.invoke(app, ["run", VICI, f"--price={bad}"])
+    assert result.exit_code == 1
+    assert "--price" in result.output
+
+
 def test_run_prints_no_swings_unless_asked() -> None:
     result = runner.invoke(app, ["run", VICI])
     assert result.exit_code == 0, result.output

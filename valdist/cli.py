@@ -23,6 +23,12 @@ def _checked_sampling(sampling: str) -> Literal["mc", "lhs"]:
     return sampling  # type: ignore[return-value]
 
 
+def _checked_price(price: float | None) -> None:
+    if price is not None and not (math.isfinite(price) and price > 0):
+        typer.echo(f"--price must be positive and finite, got {price}", err=True)
+        raise typer.Exit(code=1)
+
+
 def _load_and_hydrate(spec_path: Path):
     """Load a spec and build its Model, turning a rejected spec into a clean
     CLI failure (the digest on stderr, exit 1) rather than a raw traceback.
@@ -55,15 +61,19 @@ def run(
     swings: bool = typer.Option(
         False, "--swings", help="Also print each driver's own effect, others at median."
     ),
+    price: float | None = typer.Option(
+        None, "--price", help="Run at this price instead of the spec's."
+    ),
 ) -> None:
     """Run a valuation spec and print results."""
     from valdist import report
 
     sampling_literal = _checked_sampling(sampling)
+    _checked_price(price)
     model_spec, model = _load_and_hydrate(spec)
     result = model.run(
         n=model_spec.n,
-        price=model_spec.price,
+        price=model_spec.price if price is None else price,
         seed=model_spec.seed,
         sampling=sampling_literal,
         nu=model_spec.nu,
@@ -99,10 +109,7 @@ def solve(
             typer.echo(f"--set expects NAME=VALUE, got {item!r}", err=True)
             raise typer.Exit(code=1)
 
-    if price is not None and not (math.isfinite(price) and price > 0):
-        typer.echo(f"--price must be positive and finite, got {price}", err=True)
-        raise typer.Exit(code=1)
-
+    _checked_price(price)
     model_spec, model = _load_and_hydrate(spec)
     required = required_inputs(model_spec.valuation)
     if required is None:

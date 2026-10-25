@@ -1,6 +1,13 @@
 # Changelog
 
-Test suite: 756 -> 770
+Test suite: 770 -> 775
+
+## 2026-10-25
+
+### Added
+
+- `valdist run --price X` runs at a price other than the spec's. Value
+  percentiles are unchanged; `P(undervalued)` and the margins move.
 
 ## 2026-10-21
 
