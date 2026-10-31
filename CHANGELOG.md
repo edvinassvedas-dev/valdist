@@ -1,11 +1,12 @@
 # Changelog
 
-Test suite: 777 -> 799
+Test suite: 777 -> 803
 
 ## 2026-10-31
 
 ### Fixed
 
+- Viewer: binds loopback only, and a 500 no longer returns error details.
 - Specs: an unknown key, a repeated key, and a value that only coerces to a number are now refused.
 
 ## 2026-10-25

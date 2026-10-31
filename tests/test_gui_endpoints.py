@@ -11,6 +11,7 @@ from http.server import ThreadingHTTPServer
 
 import pytest
 
+from gui import server as gs
 from gui.server import ANALYSES_DIR, Handler
 
 
@@ -189,3 +190,61 @@ def test_validate_reports_the_shipped_specs_as_valid(base_url, a_real_analysis) 
     status, body, _ = get(f"{base_url}/api/validate?name={a_real_analysis}")
     assert status == 200
     assert body["errors"] == []
+
+
+# --------------------------------------------------------------------------- #
+# Exposure
+# --------------------------------------------------------------------------- #
+
+
+def _boom(_query):
+    raise RuntimeError("cannot open /home/someone/private/spec.yaml")
+
+
+def test_a_server_fault_tells_the_client_nothing(base_url, monkeypatch) -> None:
+    monkeypatch.setitem(gs.ROUTES, "/api/boom", _boom)
+    status, body, _ = get(f"{base_url}/api/boom")
+    assert status == 500
+    assert list(body) == ["error"]
+    assert "/home/someone" not in body["error"]
+    assert "RuntimeError" not in body["error"]
+
+
+def test_a_server_fault_is_logged_on_the_console(base_url, monkeypatch, capsys) -> None:
+    monkeypatch.setitem(gs.ROUTES, "/api/boom", _boom)
+    get(f"{base_url}/api/boom")
+    logged = capsys.readouterr().err
+    assert "Traceback" in logged
+    assert "/home/someone" in logged
+
+
+# Never the real server: a regression would hang, listening on every interface.
+@pytest.fixture
+def bound(monkeypatch) -> list:
+    addresses = []
+
+    class Server:
+        def __init__(self, address, _handler):
+            addresses.append(address)
+
+        def serve_forever(self):
+            pass
+
+        def server_close(self):
+            pass
+
+    monkeypatch.setattr(gs, "ThreadingHTTPServer", Server)
+    return addresses
+
+
+def test_the_viewer_binds_loopback(bound) -> None:
+    assert gs.main(["--port", "1234"]) == 0
+    assert bound == [("127.0.0.1", 1234)]
+
+
+def test_the_bind_address_cannot_be_widened(bound, capsys) -> None:
+    with pytest.raises(SystemExit) as exc:
+        gs.main(["--host", "0.0.0.0"])
+    assert exc.value.code == 2
+    assert "--host" in capsys.readouterr().err
+    assert bound == []

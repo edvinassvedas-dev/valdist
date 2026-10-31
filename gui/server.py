@@ -30,6 +30,9 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 ANALYSES_DIR = pathlib.Path(os.environ.get("VALDIST_ANALYSES") or REPO_ROOT / "analyses")
 INDEX_HTML = pathlib.Path(__file__).resolve().parent / "index.html"
 
+#: No flag widens this: the viewer serves local files and has no authentication.
+HOST = "127.0.0.1"
+
 #: The `report.to_json()` contract this viewer was written against. Emitting the
 #: version was only half the guarantee - it was rendered in a footer and compared
 #: against nothing, so a bumped schema would have shown missing or renamed fields
@@ -891,14 +894,9 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError as exc:
             # A malformed request - a missing parameter - is the caller's fault.
             self._send_json(400, {"error": str(exc)})
-        except Exception as exc:
-            self._send_json(
-                500,
-                {
-                    "error": f"{type(exc).__name__}: {exc}",
-                    "traceback": traceback.format_exc(),
-                },
-            )
+        except Exception:
+            traceback.print_exc()
+            self._send_json(500, {"error": "internal error, see the viewer's console"})
 
     def log_message(self, fmt: str, *args) -> None:
         """One tidy line per request instead of BaseHTTPRequestHandler's format."""
@@ -908,17 +906,14 @@ class Handler(BaseHTTPRequestHandler):
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--port", type=int, default=8756)
-    # Binds loopback by default and there is no flag to widen it: this serves
-    # local files and runs local computation, and has no authentication.
-    parser.add_argument("--host", default="127.0.0.1", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
 
     found = list_analyses()
     print(f"valdist viewer – {len(found)} analyses under {ANALYSES_DIR}")
-    print(f"  http://{args.host}:{args.port}/")
+    print(f"  http://{HOST}:{args.port}/")
     print("  read-only: no spec is edited and nothing is written back to disk")
 
-    server = ThreadingHTTPServer((args.host, args.port), Handler)
+    server = ThreadingHTTPServer((HOST, args.port), Handler)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
