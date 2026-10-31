@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import threading
 import urllib.error
@@ -216,6 +217,40 @@ def test_a_server_fault_is_logged_on_the_console(base_url, monkeypatch, capsys) 
     logged = capsys.readouterr().err
     assert "Traceback" in logged
     assert "/home/someone" in logged
+
+
+def _status(base_url: str, path: str, host: str | None) -> int:
+    conn = http.client.HTTPConnection(urllib.parse.urlsplit(base_url).netloc, timeout=30)
+    try:
+        conn.putrequest("GET", path, skip_host=True)
+        if host is not None:
+            conn.putheader("Host", host)
+        conn.endheaders()
+        return conn.getresponse().status
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("path", ["/", "/api/analyses", "/api/nope"])
+@pytest.mark.parametrize(
+    "host",
+    [
+        "evil.example",
+        "evil.example:8756",
+        "127.0.0.1.evil.example",
+        "localhost.evil.example:8756",
+        "127.0.0.1@evil.example",
+        "",
+        None,
+    ],
+)
+def test_a_foreign_host_is_refused(base_url, path, host) -> None:
+    assert _status(base_url, path, host) == 403
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "127.0.0.1:8756", "localhost:8756", "LOCALHOST"])
+def test_the_loopback_names_are_served(base_url, host) -> None:
+    assert _status(base_url, "/api/analyses", host) == 200
 
 
 # Never the real server: a regression would hang, listening on every interface.

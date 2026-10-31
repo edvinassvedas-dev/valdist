@@ -32,6 +32,7 @@ INDEX_HTML = pathlib.Path(__file__).resolve().parent / "index.html"
 
 #: No flag widens this: the viewer serves local files and has no authentication.
 HOST = "127.0.0.1"
+LOOPBACK_NAMES = frozenset({HOST, "localhost"})
 
 #: The `report.to_json()` contract this viewer was written against. Emitting the
 #: version was only half the guarantee - it was rendered in a footer and compared
@@ -862,6 +863,11 @@ class Handler(BaseHTTPRequestHandler):
         self._send(code, json.dumps(obj, indent=2).encode("utf-8"), "application/json")
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler's contract
+        # DNS rebinding: a site can point its own hostname at 127.0.0.1, past the bind.
+        if self.headers.get("Host", "").split(":")[0].lower() not in LOOPBACK_NAMES:
+            self._send_json(403, {"error": "refused: not a loopback Host"})
+            return
+
         parsed = urlparse(self.path)
         path, query = parsed.path, parse_qs(parsed.query)
 
