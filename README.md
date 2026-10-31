@@ -37,8 +37,10 @@ exploring the results.
 ```bash
 pip install -e .          # core: numpy, scipy, pydantic, typer, PyYAML
 pip install -e ".[plot]"  # adds matplotlib, only for `valdist plot`
-pytest -q                 # 837 tests, all green
+pytest -q                 # 845 tests, all green
 ```
+
+`uv sync --locked --extra dev` installs the exact versions CI tests, from `uv.lock`.
 
 Tests need **node** on `PATH`: the viewer's render functions run against
 `gui/index.html` itself.

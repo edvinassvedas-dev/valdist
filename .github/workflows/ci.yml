@@ -4,19 +4,38 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   ci:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # The lock resolves numpy and scipy differently on each side of 3.12.
+        python-version: ["3.11", "3.14"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          python-version: "3.11"
+          version: "0.13.6"
+          python-version: ${{ matrix.python-version }}
       - name: Install
-        run: pip install -e ".[dev]"
+        run: uv sync --locked --extra dev
       - name: Lint
-        run: ruff check .
+        run: uv run --no-sync ruff check .
       - name: Format check
-        run: ruff format --check .
+        run: uv run --no-sync ruff format --check .
       - name: Test
-        run: pytest -q
+        run: uv run --no-sync pytest -q
+
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.6"
+      - name: Vulnerability scan
+        run: uv audit --locked --preview-features audit-command

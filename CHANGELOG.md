@@ -1,8 +1,12 @@
 # Changelog
 
-Test suite: 777 -> 837
+Test suite: 777 -> 845
 
 ## 2026-10-31
+
+### Changed
+
+- CI installs from a hashed `uv.lock` on Python 3.11 and 3.14, with actions pinned by commit.
 
 ### Fixed
 
