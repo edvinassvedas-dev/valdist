@@ -1,6 +1,12 @@
 # Changelog
 
-Test suite: 775 -> 777
+Test suite: 777 -> 799
+
+## 2026-10-31
+
+### Fixed
+
+- Specs: an unknown key, a repeated key, and a value that only coerces to a number are now refused.
 
 ## 2026-10-25
 

@@ -50,6 +50,14 @@ class ValidationNotice:
         return f"[{self.code}] {self.message}"
 
 
+def _unknown_keys(spec: SpecModel) -> list[str]:
+    found = list(spec.model_extra)
+    for name, driver in spec.drivers.items():
+        found += [f"drivers.{name}.{k}" for k in driver.model_extra]
+        found += [f"drivers.{name}.marginal.{k}" for k in driver.marginal.model_extra]
+    return found
+
+
 def validate(spec: SpecModel) -> list[ValidationError]:
     """Return every spec violation as a list of ValidationError."""
     from valdist.adapters.registry import (
@@ -63,6 +71,21 @@ def validate(spec: SpecModel) -> list[ValidationError]:
 
     errors: list[ValidationError] = []
     declared = set(spec.factors)
+
+    for key in _unknown_keys(spec):
+        errors.append(
+            ValidationError(
+                code="unknown_key",
+                message=f"unknown key '{key}' – nothing reads it, so it has no effect",
+            )
+        )
+    for key in spec._duplicate_keys:
+        errors.append(
+            ValidationError(
+                code="duplicate_key",
+                message=f"repeated key {key} – only the last value would be used",
+            )
+        )
 
     for name, driver in spec.drivers.items():
         # Check Σλ² ≤ 1

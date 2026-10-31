@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 from valdist.core.marginals import FAMILIES
 
@@ -16,7 +16,13 @@ from valdist.core.marginals import FAMILIES
 FamilyName = Literal[tuple(sorted(FAMILIES))]  # type: ignore[valid-type]
 
 
-class MarginalSpec(BaseModel):
+class _SpecPart(BaseModel):
+    # extra="allow", not "forbid": forbid raises before validate() runs, so one
+    # typo would hide every other error. validate() reports the extras instead.
+    model_config = ConfigDict(extra="allow", strict=True)
+
+
+class MarginalSpec(_SpecPart):
     family: FamilyName
     p10: float
     p50: float
@@ -29,13 +35,15 @@ class MarginalSpec(BaseModel):
         return self
 
 
-class DriverSpec(BaseModel):
+class DriverSpec(_SpecPart):
     marginal: MarginalSpec
     loadings: dict[str, float] = Field(default_factory=dict)
 
 
-class SpecModel(BaseModel):
+class SpecModel(_SpecPart):
     """Top-level spec document."""
+
+    _duplicate_keys: list[str] = PrivateAttr(default_factory=list)
 
     schema_version: str = "1.0"
     name: str

@@ -24,21 +24,64 @@ _JSON_SUFFIXES = (".json",)
 SPEC_SUFFIXES = _YAML_SUFFIXES + _JSON_SUFFIXES
 
 
+class _KeyRecordingLoader(yaml.SafeLoader):
+    def __init__(self, stream: str) -> None:
+        super().__init__(stream)
+        self.duplicates: list[str] = []
+
+    def construct_mapping(self, node, deep=False):
+        # Before super() flattens `<<`: overriding a merged key is not a repeat.
+        seen = set()
+        for key_node, _ in node.value:
+            if not isinstance(key_node, yaml.ScalarNode) or key_node.tag.endswith(":merge"):
+                continue
+            key = (key_node.tag, key_node.value)
+            if key in seen:
+                line = key_node.start_mark.line + 1
+                self.duplicates.append(f"'{key_node.value}' (line {line})")
+            seen.add(key)
+        return super().construct_mapping(node, deep)
+
+
+def _parse_yaml(text: str) -> tuple[object, list[str]]:
+    loader = _KeyRecordingLoader(text)
+    try:
+        return loader.get_single_data(), loader.duplicates
+    finally:
+        loader.dispose()
+
+
+def _parse_json(text: str) -> tuple[object, list[str]]:
+    duplicates: list[str] = []
+
+    def keep_pairs(pairs: list[tuple[str, object]]) -> dict:
+        seen = set()
+        for key, _ in pairs:
+            if key in seen:
+                duplicates.append(f"'{key}'")
+            seen.add(key)
+        return dict(pairs)
+
+    return json.loads(text, object_pairs_hook=keep_pairs), duplicates
+
+
 def load_spec(path: Union[str, Path]) -> SpecModel:
     """Load a YAML or JSON spec file and return a validated SpecModel."""
     path = Path(path)
     suffix = path.suffix.lower()
     if suffix in _YAML_SUFFIXES:
-        raw = yaml.safe_load(path.read_text())
+        raw, duplicates = _parse_yaml(path.read_text())
     elif suffix in _JSON_SUFFIXES:
-        raw = json.loads(path.read_text())
+        raw, duplicates = _parse_json(path.read_text())
     else:
         supported = ", ".join(_YAML_SUFFIXES + _JSON_SUFFIXES)
         raise ValueError(
             f"{path}: unsupported spec extension {suffix or '(none)'!r}; "
             f"expected one of {supported}"
         )
-    return SpecModel.model_validate(raw)
+    spec = SpecModel.model_validate(raw)
+    spec._duplicate_keys = duplicates
+    return spec
 
 
 def hydrate(spec: SpecModel, *, validate: bool = True) -> Model:
