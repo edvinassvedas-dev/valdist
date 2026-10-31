@@ -247,7 +247,7 @@ def test_nonpositive_share_count_is_floored_and_flagged():
 
 
 def test_negative_asset_value_is_floored_at_zero_and_flagged():
-    # lognormal3 with a negative shift draws below zero (ATYR 2026-09-26: 2.79%).
+    # lognormal3 with a negative shift draws below zero (2.79% of one spec's draws).
     from valdist.core.diagnostics import collect_diagnostics
 
     for bad in (-92.6, -1e-9, float("nan")):
