@@ -449,7 +449,13 @@ def _ticker_of(name: str) -> str | None:
 
 
 def _as_of_of(name: str) -> str | None:
-    return name[:10] if re.match(r"\d{4}-\d{2}-\d{2}-", name) else None
+    if not re.match(r"\d{4}-\d{2}-\d{2}-", name):
+        return None
+    try:
+        _dt.date.fromisoformat(name[:10])
+    except ValueError:
+        return None
+    return name[:10]
 
 
 def _dated(name: str) -> tuple[str | None, int | None]:

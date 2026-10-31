@@ -1,11 +1,12 @@
 # Changelog
 
-Test suite: 777 -> 828
+Test suite: 777 -> 837
 
 ## 2026-10-31
 
 ### Fixed
 
+- Viewer: an impossible date in a folder name no longer stops it starting.
 - Viewer: refuses a non-loopback `Host`, which blocks DNS rebinding.
 - Viewer: binds loopback only, and a 500 no longer returns error details.
 - Specs: an unknown key, a repeated key, and a value that only coerces to a number are now refused.

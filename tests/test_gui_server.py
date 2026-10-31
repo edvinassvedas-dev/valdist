@@ -447,6 +447,81 @@ def test_every_shipped_analysis_folder_parses() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# One impossible date cannot take the viewer down
+# --------------------------------------------------------------------------- #
+
+IMPOSSIBLE_DATES = ["2026-99-99-TEST", "2026-02-30-TEST", "2026-02-29-TEST"]
+
+
+def _corpus_with(tmp_path, monkeypatch, bad: str) -> str:
+    import shutil
+
+    import gui.server as gs
+
+    good = sorted(p for p in gs.ANALYSES_DIR.iterdir() if p.is_dir())[0]
+    shutil.copytree(good, tmp_path / good.name)
+    shutil.copytree(good, tmp_path / bad)
+    for file in (tmp_path / bad).iterdir():
+        file.rename(file.with_name(file.name.replace(good.name, bad)))
+    monkeypatch.setattr(gs, "ANALYSES_DIR", tmp_path)
+    return good.name
+
+
+@pytest.mark.parametrize("bad", IMPOSSIBLE_DATES)
+def test_an_impossible_date_is_listed_as_undated(tmp_path, monkeypatch, bad) -> None:
+    import gui.server as gs
+
+    good = _corpus_with(tmp_path, monkeypatch, bad)
+    by_name = {e["name"]: e for e in gs.list_analyses()}
+    assert (by_name[bad]["as_of"], by_name[bad]["age_days"]) == (None, None)
+    assert by_name[good]["as_of"] == good[:10]
+
+
+def test_a_real_leap_day_keeps_its_date() -> None:
+    import gui.server as gs
+
+    assert gs._as_of_of("2028-02-29-TEST") == "2028-02-29"
+
+
+# date.fromisoformat() accepts ISO week dates, so the folder shape is checked first.
+@pytest.mark.parametrize("name", ["2026-W01-1-TEST", "2026-01-05", "notes"])
+def test_a_name_not_shaped_like_a_dated_folder_is_undated(name) -> None:
+    import gui.server as gs
+
+    assert gs._as_of_of(name) is None
+
+
+def test_an_impossible_date_does_not_stop_startup(tmp_path, monkeypatch) -> None:
+    import gui.server as gs
+
+    class Server:
+        def __init__(self, _address, _handler):
+            pass
+
+        def serve_forever(self):
+            pass
+
+        def server_close(self):
+            pass
+
+    _corpus_with(tmp_path, monkeypatch, IMPOSSIBLE_DATES[0])
+    monkeypatch.setattr(gs, "ThreadingHTTPServer", Server)
+    assert gs.main([]) == 0
+
+
+def test_an_impossible_date_reaches_every_view(tmp_path, monkeypatch) -> None:
+    import gui.server as gs
+
+    bad = IMPOSSIBLE_DATES[0]
+    _corpus_with(tmp_path, monkeypatch, bad)
+    assert gs.read_analysis(bad)["as_of"] is None
+    assert gs.do_run(bad)["payload"]
+    rows = gs.do_portfolio(repriced=False, run=True)["portfolio"]
+    assert {r["status"] for r in rows} == {"ok"}
+    assert [r["as_of"] for r in gs.do_timeline("TEST")["runs"]] == [None]
+
+
+# --------------------------------------------------------------------------- #
 # The price ladder can be read at any margin-of-safety anchor
 # --------------------------------------------------------------------------- #
 #
